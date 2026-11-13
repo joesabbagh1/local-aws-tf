@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useCloudStore } from '../store/useCloudStore';
 import { sanitizeIdentifier } from '../utils/terraformCompiler';
 import { AwsServiceIcon } from './AwsServiceIcon';
+import { Button, IconButton, Section, Segmented, cn, monoFieldCls } from './ui';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import { Loader2, RefreshCw, Send, Upload, Inbox, Search, Zap, AlertTriangle } from 'lucide-react';
 
@@ -149,58 +150,51 @@ export function ResourceExplorerPanel() {
   const offline = listing?.emulatorOnline === false;
 
   return (
-    <div className="p-4 space-y-4">
-      {/* Service switcher */}
-      <div className="grid grid-cols-4 gap-1 bg-[#141824] p-1 rounded-xl border border-slate-800">
-        {SERVICES.map((s) => {
-          const meta = SERVICE_BY_TYPE[s.nodeType];
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => setService(s.id)}
-              className={`py-1.5 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors ${
-                service === s.id
-                  ? 'bg-[#1f2637] text-white border border-slate-700'
-                  : 'text-slate-400 hover:text-slate-200 border border-transparent'
-              }`}
-            >
-              <span style={{ color: meta?.color }}>
-                <AwsServiceIcon iconName={meta?.iconName || 'Box'} className="w-3.5 h-3.5" />
-              </span>
-              {s.label}
-            </button>
-          );
-        })}
-      </div>
+    <>
+      <Section>
+        <Segmented
+          value={service}
+          onChange={setService}
+          options={SERVICES.map((s) => {
+            const meta = SERVICE_BY_TYPE[s.nodeType];
+            return {
+              value: s.id,
+              label: (
+                <>
+                  <span style={{ color: meta?.color }}>
+                    <AwsServiceIcon iconName={meta?.iconName || 'Box'} className="w-3 h-3" />
+                  </span>
+                  {s.label}
+                </>
+              ),
+            };
+          })}
+        />
+      </Section>
 
       {/* Live resource picker */}
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-slate-300">
-            Live resources on :{env.emulatorPort} ({activeEnv})
-          </span>
-          <button
-            type="button"
-            onClick={refreshList}
-            disabled={busy}
-            className="text-[10px] text-slate-300 hover:text-white flex items-center gap-1 disabled:opacity-40"
-          >
-            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-            Refresh
-          </button>
-        </div>
-
+      <Section
+        title={
+          <>
+            Live on <span className="font-mono">:{env.emulatorPort}</span> · {activeEnv}
+          </>
+        }
+        aside={
+          <IconButton onClick={refreshList} disabled={busy} title="Refresh" className="-mr-1.5">
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          </IconButton>
+        }
+      >
         {offline ? (
-          <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/30 text-[11px] text-amber-200 flex gap-2">
+          <p className="text-xs text-warn flex gap-2 leading-relaxed">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>{listing?.error}</span>
-          </div>
+          </p>
         ) : resources.length === 0 ? (
-          <p className="text-[11px] text-slate-500 px-1">
+          <p className="text-xs text-fg-faint leading-relaxed">
             {listing?.ok === false
               ? listing.error
-              : `No ${SERVICES.find((s) => s.id === service)?.label} resources yet. Apply the ${activeEnv} environment first.`}
+              : `No ${SERVICES.find((s) => s.id === service)?.label} resources yet. Apply ${activeEnv} first.`}
           </p>
         ) : (
           <select
@@ -209,7 +203,7 @@ export function ResourceExplorerPanel() {
               setTarget(e.target.value);
               setResult(null);
             }}
-            className="w-full bg-[#0d1017] border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-orange-500"
+            className={monoFieldCls}
           >
             {resources.map((r) => (
               <option key={r} value={r}>
@@ -218,90 +212,87 @@ export function ResourceExplorerPanel() {
             ))}
           </select>
         )}
-      </div>
 
-      {/* Per-service operations */}
-      {target && !offline && (
-        <div className="p-3 rounded-xl bg-[#141824] border border-slate-800 space-y-2.5">
-          {service === 's3' && (
-            <>
-              <button type="button" onClick={() => run('list_objects')} className={actionBtn}>
-                <Search className="w-3 h-3" /> List objects
-              </button>
-              <div className="flex gap-1.5">
-                <input value={objectKey} onChange={(e) => setObjectKey(e.target.value)} placeholder="Object key" className={inputCls} />
-                <button type="button" onClick={() => run('get_object', { key: objectKey })} className={actionBtn}>
-                  Get
-                </button>
-              </div>
-              <textarea rows={3} value={objectBody} onChange={(e) => setObjectBody(e.target.value)} className={`${inputCls} text-emerald-300`} />
-              <button type="button" onClick={() => run('put_object', { key: objectKey, body: objectBody })} className={primaryBtn}>
-                <Upload className="w-3 h-3" /> Upload as {objectKey || 'object'}
-              </button>
-            </>
-          )}
+        {/* Per-service operations */}
+        {target && !offline && (
+          <div className="mt-4 space-y-2">
+            {service === 's3' && (
+              <>
+                <div className="flex gap-1.5">
+                  <input value={objectKey} onChange={(e) => setObjectKey(e.target.value)} placeholder="Object key" className={monoFieldCls} />
+                  <Button onClick={() => run('get_object', { key: objectKey })}>Get</Button>
+                  <Button onClick={() => run('list_objects')}>
+                    <Search className="w-3 h-3" /> List
+                  </Button>
+                </div>
+                <textarea rows={3} value={objectBody} onChange={(e) => setObjectBody(e.target.value)} className={monoFieldCls} />
+                <Button variant="primary" onClick={() => run('put_object', { key: objectKey, body: objectBody })}>
+                  <Upload className="w-3 h-3" /> Upload {objectKey || 'object'}
+                </Button>
+              </>
+            )}
 
-          {service === 'dynamodb' && (
-            <>
-              <button type="button" onClick={() => run('scan')} className={actionBtn}>
-                <Search className="w-3 h-3" /> Scan items
-              </button>
-              <textarea rows={5} value={itemJson} onChange={(e) => setItemJson(e.target.value)} className={`${inputCls} text-emerald-300`} />
-              <p className="text-[10px] text-slate-500">Plain JSON is converted to DynamoDB attribute values. Include the table's key attributes.</p>
-              <button type="button" onClick={putItem} className={primaryBtn}>
-                <Upload className="w-3 h-3" /> Put item
-              </button>
-            </>
-          )}
+            {service === 'dynamodb' && (
+              <>
+                <textarea rows={5} value={itemJson} onChange={(e) => setItemJson(e.target.value)} className={monoFieldCls} />
+                <p className="text-[11px] text-fg-faint">
+                  Plain JSON is converted to DynamoDB attribute values. Include the table's key attributes.
+                </p>
+                <div className="flex gap-1.5">
+                  <Button variant="primary" onClick={putItem}>
+                    <Upload className="w-3 h-3" /> Put item
+                  </Button>
+                  <Button onClick={() => run('scan')}>
+                    <Search className="w-3 h-3" /> Scan
+                  </Button>
+                </div>
+              </>
+            )}
 
-          {service === 'sqs' && (
-            <>
-              <textarea rows={3} value={messageBody} onChange={(e) => setMessageBody(e.target.value)} className={`${inputCls} text-emerald-300`} />
-              <div className="flex gap-1.5">
-                <button type="button" onClick={() => run('send_message', { body: messageBody })} className={primaryBtn}>
-                  <Send className="w-3 h-3" /> Send
-                </button>
-                <button type="button" onClick={() => run('receive_message')} className={actionBtn}>
-                  <Inbox className="w-3 h-3" /> Receive
-                </button>
-              </div>
-            </>
-          )}
+            {service === 'sqs' && (
+              <>
+                <textarea rows={3} value={messageBody} onChange={(e) => setMessageBody(e.target.value)} className={monoFieldCls} />
+                <div className="flex gap-1.5">
+                  <Button variant="primary" onClick={() => run('send_message', { body: messageBody })}>
+                    <Send className="w-3 h-3" /> Send
+                  </Button>
+                  <Button onClick={() => run('receive_message')}>
+                    <Inbox className="w-3 h-3" /> Receive
+                  </Button>
+                </div>
+              </>
+            )}
 
-          {service === 'lambda' && (
-            <>
-              <textarea rows={5} value={eventJson} onChange={(e) => setEventJson(e.target.value)} className={`${inputCls} text-emerald-300`} />
-              <button type="button" onClick={invoke} className={primaryBtn}>
-                <Zap className="w-3 h-3" /> Invoke {target}
-              </button>
-            </>
-          )}
-        </div>
-      )}
+            {service === 'lambda' && (
+              <>
+                <textarea rows={5} value={eventJson} onChange={(e) => setEventJson(e.target.value)} className={monoFieldCls} />
+                <Button variant="primary" onClick={invoke}>
+                  <Zap className="w-3 h-3" /> Invoke
+                </Button>
+              </>
+            )}
+          </div>
+        )}
+      </Section>
 
       {/* Result */}
       {result && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-[10px]">
-            <span className={result.ok ? 'text-emerald-400' : 'text-rose-400'}>
-              {result.ok ? 'Success' : 'Failed'}
+        <Section
+          title={
+            <span className={cn('flex items-center gap-1.5', result.ok ? 'text-fg-muted' : 'text-err')}>
+              <span className={cn('w-1.5 h-1.5 rounded-full', result.ok ? 'bg-ok' : 'bg-err')} />
+              {result.ok ? 'Response' : 'Failed'}
             </span>
-          </div>
+          }
+        >
           {result.cliCommand && (
-            <code className="block text-[10px] font-mono text-slate-400 break-all">$ {result.cliCommand}</code>
+            <code className="block mb-2 text-[11px] font-mono text-fg-faint break-all select-text">$ {result.cliCommand}</code>
           )}
-          <pre className="rounded-xl border border-slate-800 bg-[#080a0f] p-3 font-mono text-[10.5px] leading-relaxed text-slate-200 overflow-x-auto max-h-80 select-text">
+          <pre className="rounded-md border border-line bg-base p-3 font-mono text-[11px] leading-relaxed text-fg/90 overflow-x-auto max-h-80 select-text">
             {result.ok ? JSON.stringify(result.data, null, 2) : result.error}
           </pre>
-        </div>
+        </Section>
       )}
-    </div>
+    </>
   );
 }
-
-const inputCls =
-  'w-full bg-[#0d1017] border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-orange-500';
-const actionBtn =
-  'px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1 shrink-0';
-const primaryBtn =
-  'px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 flex items-center gap-1 shrink-0';

@@ -39,6 +39,40 @@ export function sanitizeIdentifier(name: string): string {
   );
 }
 
+/** Config key holding hand-written HCL appended to a node's main resource block. Scoped like any other field. */
+export const EXTRA_HCL_KEY = '_extra_hcl';
+
+/**
+ * Appends raw HCL lines inside `resource "<tfType>" "<resName>" { ... }`, just before its closing brace.
+ * Interpolations and JSON keep braces balanced, so plain depth counting finds the end of the block.
+ */
+export function injectExtraHcl(blocks: string, tfType: string, resName: string, extraHcl: string): string {
+  const extra = extraHcl.replace(/\s+$/, '');
+  if (!extra.trim()) return blocks;
+
+  const header = `resource "${tfType}" "${resName}" {`;
+  const start = blocks.indexOf(header);
+  if (start === -1) {
+    return `${blocks}\n\n# Extra HCL for ${resName} was not applied: no ${tfType} block to attach it to.`;
+  }
+
+  let depth = 1;
+  let i = start + header.length;
+  while (i < blocks.length && depth > 0) {
+    if (blocks[i] === '{') depth++;
+    else if (blocks[i] === '}') depth--;
+    i++;
+  }
+  if (depth !== 0) return blocks;
+
+  const closeIdx = i - 1;
+  const indented = extra
+    .split('\n')
+    .map((line) => (line.trim() ? `  ${line.replace(/\s+$/, '')}` : ''))
+    .join('\n');
+  return `${blocks.slice(0, closeIdx).replace(/\s+$/, '')}\n\n  # Extra arguments (hand-written)\n${indented}\n${blocks.slice(closeIdx)}`;
+}
+
 export interface CompiledTerraformBundle {
   environment: EnvironmentProfile;
   mainTf: string;
@@ -174,7 +208,12 @@ locals {
       dependsOnLine
     );
 
-    resourceBlocks.push(block);
+    const extraHcl = typeof cfg[EXTRA_HCL_KEY] === 'string' ? cfg[EXTRA_HCL_KEY] : '';
+    resourceBlocks.push(
+      extraHcl.trim()
+        ? injectExtraHcl(block, SERVICE_BY_TYPE[node.data.serviceType]?.terraformResourceType || node.data.serviceType, resName, extraHcl)
+        : block
+    );
   }
 
   // 4. Generate Cross-Resource Wiring Blocks (API Gateway Integrations, Event Source Mappings, IAM Policies, ALB Attachments)
@@ -1251,7 +1290,7 @@ resource "aws_cognito_user_pool_client" "${resName}_client" {
   retention_period = ${Number(cfg.retention_period ?? 24)}
 ${
   cfg.stream_mode === 'PROVISIONED'
-    ? `  shard_Count      = ${Number(cfg.shard_count ?? 1)}`
+    ? `  shard_count      = ${Number(cfg.shard_count ?? 1)}`
     : ''
 }
   stream_mode_details {

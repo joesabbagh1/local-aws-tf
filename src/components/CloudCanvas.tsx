@@ -12,8 +12,27 @@ import { useCloudStore } from '../store/useCloudStore';
 import { AwsNodeCard } from './AwsNodeCard';
 import { AwsContainerNode } from './AwsContainerNode';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
+import { CARD_WIDTH } from '../utils/canvasLayout';
 import type { CloudNode, CloudEdge } from '../types/cloud';
-import { Sparkles, PlusCircle, Terminal } from 'lucide-react';
+import { Button } from './ui';
+import { PlanReviewBar } from './PlanReviewBar';
+
+const EDGE_COLORS: Record<string, string> = {
+  event_trigger: '#D4945A',
+  iam_grant: '#7FAE7A',
+  target_route: '#6E94B0',
+  network_attachment: '#8E8CD8',
+  data_flow: '#5A6166',
+  depends_on: '#5A6166',
+};
+
+const EDGE_LEGEND = [
+  { rel: 'event_trigger', label: 'Trigger' },
+  { rel: 'iam_grant', label: 'Access' },
+  { rel: 'target_route', label: 'Route' },
+  { rel: 'network_attachment', label: 'Network' },
+  { rel: 'data_flow', label: 'Data' },
+];
 
 const nodeTypes = {
   awsNode: AwsNodeCard,
@@ -37,8 +56,6 @@ export function CloudCanvas() {
 
   const nodes = useCloudStore((s) => s.nodes);
   const edges = useCloudStore((s) => s.edges);
-  const activeEnv = useCloudStore((s) => s.activeEnv);
-  const environments = useCloudStore((s) => s.environments);
   const onNodesChange = useCloudStore((s) => s.onNodesChange);
   const onEdgesChange = useCloudStore((s) => s.onEdgesChange);
   const onConnect = useCloudStore((s) => s.onConnect);
@@ -78,8 +95,6 @@ export function CloudCanvas() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const activeEnvProfile = environments[activeEnv];
-
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -93,8 +108,8 @@ export function CloudCanvas() {
 
       if (rfInstance.current) {
         const position = rfInstance.current.screenToFlowPosition({
-          x: event.clientX - 130,
-          y: event.clientY - 30,
+          x: event.clientX - CARD_WIDTH / 2,
+          y: event.clientY - 24,
         });
         addServiceNode(serviceType, position);
       } else {
@@ -104,117 +119,67 @@ export function CloudCanvas() {
     [addServiceNode]
   );
 
-  // Style edges with clean relationship colors & labels
+  // Edge colour encodes the relationship; selection uses the accent
   const styledEdges: CloudEdge[] = edges.map((edge): CloudEdge => {
     const rel = edge.data?.relationshipType || 'data_flow';
-    let stroke = '#64748b';
-    if (rel === 'event_trigger') stroke = '#f97316';
-    if (rel === 'iam_grant') stroke = '#10b981';
-    if (rel === 'network_attachment') stroke = '#8b5cf6';
-    if (rel === 'target_route') stroke = '#38bdf8';
+    const stroke = edge.selected ? '#E8C400' : EDGE_COLORS[rel] || EDGE_COLORS.data_flow;
 
     return {
       ...edge,
+      // Solid lines read calmer; only the selected connection animates
+      animated: !!edge.selected,
       label: edge.data?.label || rel,
       labelStyle: {
-        fill: '#cbd5e1',
+        fill: '#9CA1A4',
         fontSize: 10,
-        fontFamily: 'JetBrains Mono, monospace',
-        fontWeight: 500,
+        fontFamily: '"IBM Plex Mono", monospace',
       },
       labelBgStyle: {
-        fill: '#0d1017',
-        fillOpacity: 0.9,
-        stroke: '#1e2433',
-        strokeWidth: 1,
+        fill: '#101214',
+        fillOpacity: 1,
       },
-      labelBgPadding: [6, 3] as [number, number],
-      labelBgBorderRadius: 6,
+      labelBgPadding: [4, 2] as [number, number],
+      labelBgBorderRadius: 3,
       style: {
         stroke,
-        strokeWidth: edge.selected ? 3 : 2,
+        strokeWidth: edge.selected ? 2 : 1.5,
       },
     };
   });
 
   return (
-    <div
-      ref={reactFlowWrapper}
-      className="flex-1 h-full relative bg-[#090b10] overflow-hidden"
-    >
-      {/* Top Floating Environment Status Pill on Canvas */}
-      <div className="absolute top-3 left-3 z-10 pointer-events-none flex items-center gap-2">
-        <div className="px-3 py-1.5 rounded-xl bg-[#11141d]/90 backdrop-blur-md border border-slate-800/90 shadow-lg flex items-center gap-2.5">
-          <span
-            className="w-2.5 h-2.5 rounded-full"
-            style={{
-              backgroundColor: activeEnvProfile.color,
-              boxShadow: `0 0 10px ${activeEnvProfile.color}`,
-            }}
-          />
-          <div className="text-[11px]">
-            <span className="font-semibold text-white">
-              {activeEnvProfile.name}
-            </span>
-            <span className="text-slate-400 mx-1.5">•</span>
-            <span className="font-mono text-slate-300">
-              {activeEnvProfile.region}
-            </span>
-            <span className="text-slate-400 mx-1.5">•</span>
-            <span className="font-mono text-orange-400">
-              {activeEnvProfile.emulatorEndpoint}
-            </span>
-          </div>
-        </div>
-
-        <div className="px-2.5 py-1.5 rounded-xl bg-[#11141d]/85 backdrop-blur-md border border-slate-800/80 text-[11px] text-slate-400 hidden xl:flex items-center gap-3">
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-0.5 bg-orange-500 inline-block" /> Event Trigger
+    <div ref={reactFlowWrapper} className="flex-1 h-full relative bg-base overflow-hidden">
+      {/* Edge legend */}
+      <div className="absolute bottom-[18px] left-14 z-10 pointer-events-none hidden xl:flex items-center gap-4 text-[11px] text-fg-faint">
+        {EDGE_LEGEND.map(({ rel, label }) => (
+          <span key={rel} className="flex items-center gap-1.5">
+            <span className="w-3 h-0.5 rounded-full" style={{ backgroundColor: EDGE_COLORS[rel] }} />
+            {label}
           </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-0.5 bg-emerald-500 inline-block" /> IAM / Data
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-0.5 bg-sky-400 inline-block" /> Route / Origin
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-0.5 bg-violet-500 inline-block" /> VPC Network
-          </span>
-        </div>
+        ))}
       </div>
 
-      {/* Empty Canvas Onboarding Overlay */}
+      <PlanReviewBar />
+
+      {/* Empty canvas */}
       {nodes.length === 0 && (
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
-          <div className="pointer-events-auto max-w-md w-full p-6 rounded-2xl bg-[#11141d]/95 border border-slate-800 shadow-2xl text-center space-y-4">
-            <div className="w-12 h-12 rounded-2xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center mx-auto text-orange-400">
-              <PlusCircle className="w-6 h-6" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-white">
-                Design Your Local AWS Architecture
-              </h2>
-              <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                Drag and drop any AWS service from the left palette onto this 2D canvas, wire connections between handles, and watch your multi-environment Terraform compile in real time.
-              </p>
-            </div>
-            <div className="flex items-center justify-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setTemplateModalOpen(true)}
-                className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 flex items-center gap-1.5 transition-colors"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                Load Starter Blueprint
-              </button>
-              <button
-                type="button"
+          <div className="pointer-events-auto max-w-sm text-center">
+            <h2 className="text-[15px] font-medium text-fg">Empty canvas</h2>
+            <p className="text-[13px] text-fg-muted mt-1.5 leading-relaxed">
+              Drag a service from the left, or start from a blueprint. Terraform for every environment
+              updates as you build.
+            </p>
+            <div className="flex items-center justify-center gap-2 mt-5">
+              <Button variant="primary" size="md" onClick={() => setTemplateModalOpen(true)}>
+                Browse blueprints
+              </Button>
+              <Button
+                size="md"
                 onClick={() => addServiceNode('aws_lambda_function', { x: 350, y: 220 })}
-                className="px-3.5 py-2 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 transition-colors"
               >
-                <Terminal className="w-3.5 h-3.5" />
-                Add Lambda Node
-              </button>
+                Add a Lambda
+              </Button>
             </div>
           </div>
         </div>
@@ -242,29 +207,26 @@ export function CloudCanvas() {
         onDragOver={onDragOver}
         onDrop={onDrop}
         fitView
-        fitViewOptions={{ padding: 0.18 }}
+        fitViewOptions={{ padding: 0.1 }}
         minZoom={0.2}
         maxZoom={2}
         defaultEdgeOptions={{
           type: 'smoothstep',
         }}
       >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={22}
-          size={1.3}
-          color="#1e293b"
-        />
-        <Controls position="bottom-left" />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#2C3135" />
+        <Controls position="bottom-left" showInteractive={false} />
         <MiniMap
           position="bottom-right"
           pannable
           zoomable
-          nodeColor={(node) => {
-            const svc = SERVICE_BY_TYPE[String(node.data?.serviceType || '')];
-            return svc?.color || '#f97316';
-          }}
-          maskColor="rgba(9, 11, 16, 0.75)"
+          nodeColor={(node) =>
+            node.type === 'awsContainer' ? '#1E2124' : SERVICE_BY_TYPE[String(node.data?.serviceType || '')]?.color || '#6E7478'
+          }
+          nodeStrokeColor={(node) => (node.type === 'awsContainer' ? '#454B50' : 'transparent')}
+          nodeBorderRadius={2}
+          maskColor="rgba(16, 18, 20, 0.7)"
+          style={{ width: 168, height: 112 }}
         />
       </ReactFlow>
     </div>

@@ -7,7 +7,7 @@ import { ImportExportModal } from './components/ImportExportModal';
 
 export function App() {
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#090b10] text-slate-100 overflow-hidden">
+    <div className="h-screen w-screen flex flex-col bg-base text-fg overflow-hidden">
       <TopNavBar />
       <div className="flex-1 flex min-h-0 overflow-hidden">
         <ServiceCatalogSidebar />

@@ -1,3 +1,0 @@
-import json
-def handler(event, context):
-    return {"statusCode": 200, "body": json.dumps({"ok": True, "resource": "fulfillment_worker", "env": "dev"})}

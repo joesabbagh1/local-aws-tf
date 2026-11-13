@@ -28,6 +28,14 @@ import {
   sanitizeIdentifier,
 } from '../utils/terraformCompiler';
 import { parseTerraformHclToCanvas } from '../utils/hclImporter';
+import { toProjectFile, withRuntimeStateFrom } from '../utils/projectFile';
+import {
+  buildResourceNameResolver,
+  planHasChanges,
+  summarizePlan,
+  type PlanResourceChange,
+  type PlanSummary,
+} from '../utils/planSummary';
 import {
   autoLayoutNodes,
   findDropContainer,
@@ -43,6 +51,22 @@ export type RightDrawerTab =
   | 'emulator'
   | 'explorer'
   | 'audit';
+
+export type TerraformCommand = 'init' | 'validate' | 'plan' | 'apply' | 'destroy';
+
+/** A plan that has been run but not applied yet; the canvas shows it until the design changes. */
+export interface PendingPlan extends PlanSummary {
+  envId: EnvironmentId;
+  /** Compiled Terraform at plan time. A different value means the plan no longer matches the canvas. */
+  fingerprint: string;
+}
+
+/** Where the canvas is saved: a file next to the Terraform when the local API is reachable. */
+export interface ProjectFileStatus {
+  state: 'unknown' | 'saved' | 'saving' | 'unavailable' | 'error';
+  file?: string;
+  error?: string;
+}
 
 interface HistorySnapshot {
   nodes: CloudNode[];
@@ -72,6 +96,9 @@ interface CloudStudioState {
   // Live Terminal / Execution Output
   terminalLogs: string[];
   isRunningCommand: boolean;
+  runningCommand: TerraformCommand | null;
+  pendingPlan: PendingPlan | null;
+  projectFile: ProjectFileStatus;
 
   // Actions
   /** Snapshot for undo. Calls sharing a coalesceKey within a short window collapse into one entry. */
@@ -128,9 +155,14 @@ interface CloudStudioState {
   syncTerraformToDisk: () => Promise<{ ok: boolean; writtenFiles?: string[] }>;
   controlEmulatorContainer: (action: 'start' | 'stop', envId?: EnvironmentId) => Promise<void>;
   runTerraformCommand: (
-    command: 'init' | 'validate' | 'plan' | 'apply' | 'destroy',
-    envId?: EnvironmentId
+    command: TerraformCommand,
+    envId?: EnvironmentId,
+    options?: { usePlan?: boolean }
   ) => Promise<void>;
+  /** Plans first; applies only a plan that was reviewed and still matches the canvas. */
+  requestApply: (envId?: EnvironmentId) => Promise<void>;
+  discardPlan: () => void;
+  loadProjectFromDisk: () => Promise<void>;
   fetchTerraformOutputs: (envId: EnvironmentId) => Promise<void>;
   appendTerminalLog: (msg: string) => void;
   clearTerminalLogs: () => void;
@@ -147,15 +179,22 @@ const TF_PROGRESS_LINE =
   /^(?:module\.[^\s]+\.)?([a-z0-9_]+)\.([A-Za-z0-9_-]+)(?:\[[^\]]*\])?: (Creating|Creation complete|Modifying|Modifications complete|Destroying|Destruction complete|Still creating|Still modifying)/;
 const TF_ERROR_RESOURCE = /with (?:module\.[^\s]+\.)?([a-z0-9_]+)\.([A-Za-z0-9_-]+)/;
 
-/** Maps a Terraform resource name (e.g. orders_fn or orders_fn_exec_role) back to its canvas node. */
-function buildResourceNameResolver(nodes: CloudNode[], envId: EnvironmentId) {
-  const entries = nodes
-    .filter((n) => n.data.envEnabled?.[envId] !== false)
-    .map((n) => ({ id: n.id, resName: sanitizeIdentifier(n.data.resourceName || n.data.label) }))
-    .sort((a, b) => b.resName.length - a.resName.length);
-
-  return (tfName: string): string | undefined =>
-    entries.find((e) => tfName === e.resName || tfName.startsWith(`${e.resName}_`))?.id;
+/** Everything that decides what `terraform plan` would do for one environment. */
+function planFingerprint(
+  state: Pick<CloudStudioState, 'nodes' | 'edges' | 'environments' | 'targetLocalEmulator'>,
+  envId: EnvironmentId
+): string {
+  const compiled = compileTerraformForEnvironment(
+    state.nodes,
+    state.edges,
+    state.environments[envId],
+    state.environments,
+    state.targetLocalEmulator
+  );
+  const lambdaCode = state.nodes
+    .filter((n) => n.data.serviceType === 'aws_lambda_function' && n.data.envEnabled?.[envId] !== false)
+    .map((n) => `${n.id}:${n.data.inlineCode || ''}`);
+  return [compiled.mainTf, compiled.providerTf, compiled.variablesTf, compiled.tfvars, compiled.outputsTf, ...lambdaCode].join('\u0000');
 }
 
 function withProvisioningState(
@@ -175,6 +214,48 @@ function withProvisioningState(
       },
     };
   });
+}
+
+/** Environment colours are presentation, not user settings; always take the current ones. */
+function withCurrentEnvironmentColors(
+  environments: Partial<Record<EnvironmentId, EnvironmentProfile>> | undefined
+): Record<EnvironmentId, EnvironmentProfile> | undefined {
+  if (!environments) return undefined;
+  return Object.fromEntries(
+    ENV_ORDER.map((id) => [
+      id,
+      { ...DEFAULT_ENVIRONMENTS[id], ...environments[id], color: DEFAULT_ENVIRONMENTS[id].color },
+    ])
+  ) as Record<EnvironmentId, EnvironmentProfile>;
+}
+
+// Disk copy of the project. Saving starts only after the first load, so a fresh tab can never
+// overwrite the file with its default canvas.
+const projectDisk = { ready: false, lastSaved: '', loading: null as Promise<void> | null };
+const PROJECT_SAVE_DEBOUNCE_MS = 800;
+
+async function saveProjectToDisk(): Promise<void> {
+  if (!projectDisk.ready) return;
+  const state = useCloudStore.getState();
+  const project = toProjectFile(state);
+  const serialized = JSON.stringify(project);
+  if (serialized === projectDisk.lastSaved) return;
+
+  const file = state.projectFile.file;
+  useCloudStore.setState({ projectFile: { state: 'saving', file } });
+  try {
+    const res = await fetch('/api/project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    projectDisk.lastSaved = serialized;
+    useCloudStore.setState({ projectFile: { state: 'saved', file } });
+  } catch (err: any) {
+    useCloudStore.setState({ projectFile: { state: 'error', file, error: err?.message || 'Save failed' } });
+  }
 }
 
 export const useCloudStore = create<CloudStudioState>()(
@@ -203,9 +284,12 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       terminalLogs: [
-        '✨ LocalCloud Studio ready. Multi-environment compiler online (dev:9297, testing:9298, staging:9299, prod:9300).',
+        'LocalCloud Studio ready. Emulator ports: dev 9297, testing 9298, staging 9299, prod 9300.',
       ],
       isRunningCommand: false,
+      runningCommand: null,
+      pendingPlan: null,
+      projectFile: { state: 'unknown' },
 
       pushHistory: (coalesceKey) => {
         const now = Date.now();
@@ -683,7 +767,7 @@ export const useCloudStore = create<CloudStudioState>()(
           set({
             nodes: normalizeNodes(parsed.nodes),
             edges: parsed.edges,
-            environments: parsed.environments || get().environments,
+            environments: withCurrentEnvironmentColors(parsed.environments) || get().environments,
             activeEnv: parsed.activeEnv || 'dev',
             selectedNodeId: parsed.nodes[0]?.id || null,
             selectedEdgeId: null,
@@ -781,7 +865,7 @@ export const useCloudStore = create<CloudStudioState>()(
           const data = await res.json();
           if (data.ok) {
             appendTerminalLog(
-              `✅ Synced ${data.writtenFiles?.length || 0} Terraform & Lambda zip artifacts to ./terraform-out`
+              `Synced ${data.writtenFiles?.length || 0} Terraform & Lambda zip artifacts to ./terraform-out`
             );
             return { ok: true, writtenFiles: data.writtenFiles };
           }
@@ -798,7 +882,7 @@ export const useCloudStore = create<CloudStudioState>()(
 
         set({ isRunningCommand: true });
         appendTerminalLog(
-          `🐳 [${envId.toUpperCase()}] ${action === 'start' ? 'Starting' : 'Stopping'} aws-emulator container on port ${profile.emulatorPort}...`
+          `[${envId.toUpperCase()}] ${action === 'start' ? 'Starting' : 'Stopping'} aws-emulator container on port ${profile.emulatorPort}...`
         );
 
         try {
@@ -814,28 +898,51 @@ export const useCloudStore = create<CloudStudioState>()(
           const data = await res.json();
           if (data.ok) {
             appendTerminalLog(
-              `✅ [${envId.toUpperCase()}] Container ${action} succeeded:\n${data.output || 'Ready'}`
+              `[${envId.toUpperCase()}] Container ${action} succeeded:\n${data.output || 'Ready'}`
             );
           } else {
             appendTerminalLog(
-              `⚠️ [${envId.toUpperCase()}] Container ${action} note: ${data.error || ''}\n${data.output || ''}`
+              `Warning: [${envId.toUpperCase()}] Container ${action} note: ${data.error || ''}\n${data.output || ''}`
             );
           }
           await refreshEmulatorStatuses();
         } catch (err: any) {
-          appendTerminalLog(`❌ [${envId.toUpperCase()}] Failed: ${err?.message}`);
+          appendTerminalLog(`Error: [${envId.toUpperCase()}] ${err?.message}`);
         } finally {
           set({ isRunningCommand: false });
         }
       },
 
-      runTerraformCommand: async (command, targetEnvId) => {
+      requestApply: async (targetEnvId) => {
+        const envId = targetEnvId || get().activeEnv;
+        const plan = get().pendingPlan;
+        const reviewed =
+          plan && plan.envId === envId && planHasChanges(plan) && plan.fingerprint === planFingerprint(get(), envId);
+        if (reviewed) {
+          await get().runTerraformCommand('apply', envId, { usePlan: true });
+        } else {
+          set({ rightTab: 'emulator' });
+          await get().runTerraformCommand('plan', envId);
+        }
+      },
+
+      discardPlan: () => set({ pendingPlan: null }),
+
+      runTerraformCommand: async (command, targetEnvId, options) => {
         const envId = targetEnvId || get().activeEnv;
         const profile = get().environments[envId];
         const { syncTerraformToDisk, appendTerminalLog } = get();
         const tag = `[${envId.toUpperCase()}]`;
 
-        set({ isRunningCommand: true });
+        // Any run other than applying the reviewed plan makes that plan obsolete
+        const keepPlan = command === 'apply' && options?.usePlan;
+        set((state) => ({
+          isRunningCommand: true,
+          runningCommand: command,
+          pendingPlan: keepPlan || state.pendingPlan?.envId !== envId ? state.pendingPlan : null,
+        }));
+        const fingerprint = planFingerprint(get(), envId);
+        let planChanges: PlanResourceChange[] | null = null;
 
         const interimState: ProvisioningState | undefined =
           command === 'apply' || command === 'destroy'
@@ -856,16 +963,17 @@ export const useCloudStore = create<CloudStudioState>()(
 
         const synced = await syncTerraformToDisk();
         if (!synced.ok) {
-          appendTerminalLog(`❌ ${tag} Could not write ./terraform-out (is the dev server running?)`);
+          appendTerminalLog(`Error: ${tag} could not write ./terraform-out (is the dev server running?)`);
           set((state) => ({
             nodes: withProvisioningState(state.nodes, envId, (n) => previousStates[n.id] ?? 'unapplied'),
             isRunningCommand: false,
+            runningCommand: null,
           }));
           return;
         }
 
         appendTerminalLog(
-          `🚀 ${tag} terraform ${command} in ./terraform-out/environments/${envId} → https://127.0.0.1:${profile.emulatorPort}`
+          `${tag} $ terraform ${command} in ./terraform-out/environments/${envId} → https://127.0.0.1:${profile.emulatorPort}`
         );
 
         const resolveNode = buildResourceNameResolver(get().nodes, envId);
@@ -909,6 +1017,7 @@ export const useCloudStore = create<CloudStudioState>()(
               envId,
               port: profile.emulatorPort,
               region: profile.region,
+              usePlan: options?.usePlan === true,
             }),
           });
           if (!res.body) throw new Error(`HTTP ${res.status}`);
@@ -924,13 +1033,19 @@ export const useCloudStore = create<CloudStudioState>()(
             for (const line of lines) {
               const exitMatch = line.match(/^__LC_EXIT__:(-?\d+)$/);
               if (exitMatch) exitCode = Number(exitMatch[1]);
-              else handleLine(line);
+              else if (line.startsWith('__LC_PLAN__:')) {
+                try {
+                  planChanges = JSON.parse(line.slice('__LC_PLAN__:'.length));
+                } catch {
+                  planChanges = null;
+                }
+              } else handleLine(line);
             }
             if (done) break;
           }
           if (buffer) handleLine(buffer);
         } catch (err: any) {
-          appendTerminalLog(`❌ ${tag} Error: ${err?.message}`);
+          appendTerminalLog(`Error: ${tag} ${err?.message}`);
         }
 
         const ok = exitCode === 0;
@@ -944,12 +1059,19 @@ export const useCloudStore = create<CloudStudioState>()(
             return previousStates[n.id] ?? 'unapplied';
           }),
           isRunningCommand: false,
+          runningCommand: null,
+          pendingPlan:
+            command === 'plan' && ok && planChanges
+              ? { envId, fingerprint, ...summarizePlan(planChanges, state.nodes, envId) }
+              : command === 'apply' && state.pendingPlan?.envId === envId
+                ? null
+                : state.pendingPlan,
         }));
 
         appendTerminalLog(
           ok
-            ? `✅ ${tag} terraform ${command} completed successfully.`
-            : `⚠️ ${tag} terraform ${command} exited with code ${exitCode}.`
+            ? `${tag} terraform ${command} completed successfully.`
+            : `Warning: ${tag} terraform ${command} exited with code ${exitCode}.`
         );
 
         if (ok && command === 'apply') await get().fetchTerraformOutputs(envId);
@@ -1006,11 +1128,56 @@ export const useCloudStore = create<CloudStudioState>()(
             ),
           }));
           get().appendTerminalLog(
-            `📤 [${envId.toUpperCase()}] Captured ${Object.keys(data.outputs).length} Terraform outputs onto canvas nodes.`
+            `[${envId.toUpperCase()}] Captured ${Object.keys(data.outputs).length} Terraform outputs onto canvas nodes.`
           );
         } catch {
           // Outputs are a convenience; the apply itself already succeeded
         }
+      },
+
+      loadProjectFromDisk: () => {
+        // StrictMode mounts twice in development; both callers share one load
+        projectDisk.loading ??= (async () => {
+        try {
+          const res = await fetch('/api/project');
+          const data = await res.json();
+          if (!data.ok) {
+            // Never overwrite a file we could not read
+            set({ projectFile: { state: data.exists ? 'error' : 'unavailable', file: data.file, error: data.error } });
+            if (data.exists) get().appendTerminalLog(`Error: ${data.error}. Fix or remove the file, then reload.`);
+            return;
+          }
+
+          if (data.exists && Array.isArray(data.project?.nodes) && Array.isArray(data.project?.edges)) {
+            const project = data.project;
+            const nodes = withRuntimeStateFrom(normalizeNodes(project.nodes), get().nodes);
+            set((state) => ({
+              nodes,
+              edges: project.edges,
+              environments: withCurrentEnvironmentColors(project.environments) || state.environments,
+              targetLocalEmulator:
+                typeof project.targetLocalEmulator === 'boolean' ? project.targetLocalEmulator : state.targetLocalEmulator,
+              selectedNodeId: nodes.some((n) => n.id === state.selectedNodeId) ? state.selectedNodeId : null,
+              selectedEdgeId: null,
+              past: [],
+              future: [],
+            }));
+          }
+
+          projectDisk.ready = true;
+          projectDisk.lastSaved = data.exists ? JSON.stringify(toProjectFile(get())) : '';
+          set({ projectFile: { state: 'saved', file: data.file } });
+          get().appendTerminalLog(
+            data.exists ? `Loaded project from ./${data.file}` : `Saving project to ./${data.file}`
+          );
+          // First run in this directory, or the file needs normalising: write it now
+          await saveProjectToDisk();
+        } catch {
+          // No local API (static preview): the canvas stays in browser storage only
+          set({ projectFile: { state: 'unavailable' } });
+        }
+        })();
+        return projectDisk.loading;
       },
 
       appendTerminalLog: (msg) =>
@@ -1042,8 +1209,34 @@ export const useCloudStore = create<CloudStudioState>()(
             state === 'planning' || state === 'provisioning' ? 'unapplied' : undefined
           );
         }
-        return { ...current, ...saved, nodes };
+        const environments = withCurrentEnvironmentColors(saved.environments) || current.environments;
+        return { ...current, ...saved, environments, nodes };
       },
     }
   )
 );
+
+// React to design changes: drop a plan that no longer matches the canvas, and save the project file
+let projectChangeTimer: ReturnType<typeof setTimeout> | undefined;
+useCloudStore.subscribe((state, prev) => {
+  if (
+    state.nodes === prev.nodes &&
+    state.edges === prev.edges &&
+    state.environments === prev.environments &&
+    state.targetLocalEmulator === prev.targetLocalEmulator
+  ) {
+    return;
+  }
+  clearTimeout(projectChangeTimer);
+  projectChangeTimer = setTimeout(() => {
+    const { pendingPlan, isRunningCommand } = useCloudStore.getState();
+    if (
+      pendingPlan &&
+      !isRunningCommand &&
+      pendingPlan.fingerprint !== planFingerprint(useCloudStore.getState(), pendingPlan.envId)
+    ) {
+      useCloudStore.setState({ pendingPlan: null });
+    }
+    void saveProjectToDisk();
+  }, PROJECT_SAVE_DEBOUNCE_MS);
+});

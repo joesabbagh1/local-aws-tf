@@ -1,77 +1,69 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, type ReactNode } from 'react';
 import { useCloudStore } from '../store/useCloudStore';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import {
   compileTerraformForEnvironment,
   resolveNodeConfigForEnv,
   isFieldOverriddenInEnv,
+  EXTRA_HCL_KEY,
 } from '../utils/terraformCompiler';
 import type { EnvironmentId, SchemaField } from '../types/cloud';
-import { AwsServiceIcon } from './AwsServiceIcon';
 import { RunnerConsole } from './RunnerConsole';
 import { ResourceExplorerPanel } from './ResourceExplorerPanel';
 import { ArchitectureAuditPanel } from './ArchitectureAuditPanel';
 import type { RightDrawerTab } from '../store/useCloudStore';
+import { Copy, Check, RotateCcw, Trash2, Plus, X, ArrowRight, RefreshCw, ExternalLink } from 'lucide-react';
 import {
-  Sliders,
-  Code2,
-  Layers,
-  Terminal,
-  Copy,
-  Check,
-  RotateCcw,
-  Trash2,
-  Sparkles,
-  Plus,
-  X,
-  ArrowRight,
-  RefreshCw,
-  ShieldCheck,
-  ExternalLink,
-  Database,
-  ShieldAlert,
-  FileCode,
-  Radio,
-} from 'lucide-react';
+  Button,
+  IconButton,
+  EnvDot,
+  Kbd,
+  Section,
+  Segmented,
+  ServiceGlyph,
+  Switch,
+  cn,
+  fieldCls,
+  monoFieldCls,
+} from './ui';
 
 const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 
-const DRAWER_TABS: { id: RightDrawerTab; label: string; icon: typeof Sliders; tone: string }[] = [
-  { id: 'inspector', label: 'Inspect', icon: Sliders, tone: 'text-orange-400' },
-  { id: 'env-matrix', label: 'Envs', icon: Layers, tone: 'text-purple-400' },
-  { id: 'terraform', label: 'HCL', icon: Code2, tone: 'text-sky-400' },
-  { id: 'emulator', label: 'Runner', icon: Terminal, tone: 'text-emerald-400' },
-  { id: 'explorer', label: 'Data', icon: Database, tone: 'text-teal-300' },
-  { id: 'audit', label: 'Audit', icon: ShieldAlert, tone: 'text-rose-300' },
+const DRAWER_TABS: { id: RightDrawerTab; label: string }[] = [
+  { id: 'inspector', label: 'Inspect' },
+  { id: 'env-matrix', label: 'Envs' },
+  { id: 'terraform', label: 'Terraform' },
+  { id: 'emulator', label: 'Run' },
+  { id: 'explorer', label: 'Data' },
+  { id: 'audit', label: 'Audit' },
 ];
+
+const envShort = (envId: EnvironmentId) => (envId === 'testing' ? 'test' : envId);
 
 export function RightWorkspaceDrawer() {
   const rightTab = useCloudStore((s) => s.rightTab);
   const setRightTab = useCloudStore((s) => s.setRightTab);
 
   return (
-    <aside className="w-[460px] shrink-0 h-full bg-[#0d1017] border-l border-slate-800/80 flex flex-col select-none">
-      {/* Top Sub-Tab Bar */}
-      <div className="px-2 pt-2.5 pb-2 border-b border-slate-800/80 grid grid-cols-6 gap-0.5 bg-[#11141d]/70">
-        {DRAWER_TABS.map(({ id, label, icon: Icon, tone }) => (
+    <aside className="w-[400px] shrink-0 h-full bg-panel border-l border-line flex flex-col select-none">
+      <nav className="h-10 shrink-0 px-2 border-b border-line flex items-stretch">
+        {DRAWER_TABS.map(({ id, label }) => (
           <button
             key={id}
             type="button"
             onClick={() => setRightTab(id)}
-            className={`py-1.5 rounded-lg text-[10.5px] font-medium flex flex-col items-center justify-center gap-0.5 transition-all ${
-              rightTab === id
-                ? 'bg-[#1c2233] text-white border border-slate-700/80 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 border border-transparent'
-            }`}
+            className={cn(
+              'relative px-2.5 text-[13px] transition-colors',
+              rightTab === id ? 'text-fg' : 'text-fg-muted hover:text-fg'
+            )}
           >
-            <Icon className={`w-3.5 h-3.5 ${tone}`} />
-            <span>{label}</span>
+            {label}
+            {rightTab === id && <span className="absolute left-2.5 right-2.5 -bottom-px h-px bg-fg" />}
           </button>
         ))}
-      </div>
+      </nav>
 
-      {/* Tab Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto">
         {rightTab === 'inspector' && <NodeAndEdgeInspector />}
         {rightTab === 'env-matrix' && <MultiEnvMatrixPanel />}
         {rightTab === 'terraform' && <LiveTerraformPanel />}
@@ -82,6 +74,31 @@ export function RightWorkspaceDrawer() {
     </aside>
   );
 }
+
+/** Two-column property grid row: label on the left, control on the right. */
+function PropRow({
+  label,
+  hint,
+  overridden,
+  children,
+}: {
+  label: ReactNode;
+  hint?: string;
+  overridden?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <div className="self-start h-7 flex items-center gap-1.5 min-w-0" title={hint}>
+        {overridden && <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />}
+        <span className={cn('text-xs leading-tight', overridden ? 'text-fg' : 'text-fg-muted')}>{label}</span>
+      </div>
+      <div className="min-w-0 flex items-start gap-1">{children}</div>
+    </>
+  );
+}
+
+const PROP_GRID = 'grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-2.5';
 
 // ============================================================================
 // 1. NODE & EDGE PROPERTY INSPECTOR
@@ -115,83 +132,65 @@ function NodeAndEdgeInspector() {
     const dstNode = nodes.find((n) => n.id === selectedEdge.target);
 
     return (
-      <div className="p-4 space-y-5">
-        <div className="p-3.5 rounded-xl bg-[#141824] border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-orange-500/15 text-orange-400">
-              Connection Inspector
-            </span>
-            <button
-              type="button"
-              onClick={() => deleteEdge(selectedEdge.id)}
-              className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1"
-            >
-              <Trash2 className="w-3.5 h-3.5" /> Remove Wire
-            </button>
+      <>
+        <div className="px-4 py-4 border-b border-line flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs text-fg-muted">Connection</div>
+            <div className="mt-1 flex items-center gap-2 text-[13px] font-medium text-fg min-w-0">
+              <span className="truncate">{srcNode?.data.label || selectedEdge.source}</span>
+              <ArrowRight className="w-3.5 h-3.5 text-fg-faint shrink-0" />
+              <span className="truncate">{dstNode?.data.label || selectedEdge.target}</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-white pt-1">
-            <span className="truncate">{srcNode?.data.label || selectedEdge.source}</span>
-            <ArrowRight className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-            <span className="truncate">{dstNode?.data.label || selectedEdge.target}</span>
-          </div>
+          <IconButton variant="danger" onClick={() => deleteEdge(selectedEdge.id)} title="Remove connection">
+            <Trash2 className="w-3.5 h-3.5" />
+          </IconButton>
         </div>
 
-        <div className="space-y-3">
-          <div>
-            <label className="block text-[11px] font-medium text-slate-300 mb-1">
-              Relationship / Terraform Wiring Type
-            </label>
-            <select
-              value={selectedEdge.data?.relationshipType || 'data_flow'}
-              onChange={(e) =>
-                updateEdgeData(selectedEdge.id, {
-                  relationshipType: e.target.value as any,
-                })
-              }
-              className="w-full bg-[#141824] border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-orange-500"
-            >
-              <option value="event_trigger">Event Trigger (Event Source Mapping / API Route)</option>
-              <option value="iam_grant">IAM Policy Grant & Data Access</option>
-              <option value="target_route">Load Balancer / CDN Origin Target</option>
-              <option value="network_attachment">VPC / Subnet / Security Group Placement</option>
-              <option value="data_flow">Service-to-Service Data Connection</option>
-              <option value="depends_on">Explicit Terraform depends_on</option>
-            </select>
+        <Section>
+          <div className={PROP_GRID}>
+            <PropRow label="Type" hint="How the compiler wires these two resources together">
+              <select
+                value={selectedEdge.data?.relationshipType || 'data_flow'}
+                onChange={(e) =>
+                  updateEdgeData(selectedEdge.id, {
+                    relationshipType: e.target.value as any,
+                  })
+                }
+                className={fieldCls}
+              >
+                <option value="event_trigger">Event trigger / API route</option>
+                <option value="iam_grant">IAM access grant</option>
+                <option value="target_route">Load balancer / CDN origin</option>
+                <option value="network_attachment">Network placement</option>
+                <option value="data_flow">Data flow</option>
+                <option value="depends_on">depends_on only</option>
+              </select>
+            </PropRow>
+            <PropRow label="Label" hint="Shown on the canvas; route key for API routes, e.g. ANY /orders/*">
+              <input
+                type="text"
+                value={selectedEdge.data?.label || ''}
+                placeholder="ANY /orders/*"
+                onChange={(e) => updateEdgeData(selectedEdge.id, { label: e.target.value })}
+                className={monoFieldCls}
+              />
+            </PropRow>
           </div>
-
-          <div>
-            <label className="block text-[11px] font-medium text-slate-300 mb-1">
-              Edge Label / Route Key (e.g. ANY /orders/*)
-            </label>
-            <input
-              type="text"
-              value={selectedEdge.data?.label || ''}
-              onChange={(e) => updateEdgeData(selectedEdge.id, { label: e.target.value })}
-              className="w-full bg-[#141824] border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-orange-500"
-            />
-          </div>
-        </div>
-      </div>
+        </Section>
+      </>
     );
   }
 
   if (!selectedNode) {
     return (
-      <div className="p-6 text-center space-y-3">
-        <div className="w-11 h-11 rounded-xl bg-slate-800/70 border border-slate-700/60 flex items-center justify-center mx-auto text-slate-400">
-          <Sliders className="w-5 h-5" />
-        </div>
-        <div className="space-y-1">
-          <h3 className="text-xs font-semibold text-slate-200">
-            Select Any Resource or Wire on the Canvas
-          </h3>
-          <p className="text-[11px] text-slate-400 leading-relaxed">
-            Click a node to inspect and configure its AWS parameters, toggle availability across{' '}
-            <span className="text-sky-400 font-mono">dev</span>,{' '}
-            <span className="text-purple-400 font-mono">testing</span>,{' '}
-            <span className="text-amber-400 font-mono">staging</span>, and{' '}
-            <span className="text-emerald-400 font-mono">prod</span>, or customize environment-specific overrides.
-          </p>
+      <div className="px-6 py-16 text-center">
+        <p className="text-[13px] text-fg-muted">Select a resource or connection to edit it.</p>
+        <div className="mt-6 inline-grid grid-cols-[auto_auto] gap-x-4 gap-y-2 text-xs text-fg-faint text-left">
+          <Kbd>⌘Z</Kbd> <span>Undo</span>
+          <Kbd>⌘D</Kbd> <span>Duplicate</span>
+          <Kbd>⌫</Kbd> <span>Delete</span>
+          <Kbd>Esc</Kbd> <span>Deselect</span>
         </div>
       </div>
     );
@@ -199,9 +198,7 @@ function NodeAndEdgeInspector() {
 
   const svc = SERVICE_BY_TYPE[selectedNode.data.serviceType];
   const resolvedConfig = resolveNodeConfigForEnv(selectedNode, activeEnv);
-  const envOverridesCount = Object.keys(
-    selectedNode.data.envOverrides?.[activeEnv] || {}
-  ).length;
+  const envOverridesCount = Object.keys(selectedNode.data.envOverrides?.[activeEnv] || {}).length;
   const currentEnvProfile = environments[activeEnv];
 
   const handleFieldValueChange = (field: SchemaField, rawVal: any) => {
@@ -225,80 +222,39 @@ function NodeAndEdgeInspector() {
     updateNodeTags(selectedNode.id, next);
   };
 
+  const tags = Object.entries(selectedNode.data.tags || {});
+
   return (
-    <div className="p-4 space-y-5">
-      {/* Node Header Card */}
-      <div className="p-3.5 rounded-xl bg-[#141824] border border-slate-800/90 space-y-3">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border"
-              style={{
-                backgroundColor: `${svc?.color || '#f97316'}18`,
-                borderColor: `${svc?.color || '#f97316'}45`,
-                color: svc?.color || '#f97316',
-              }}
-            >
-              <AwsServiceIcon iconName={svc?.iconName || 'Server'} className="w-5 h-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
-                  {svc?.terraformResourceType}
-                </span>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">
-                  aws-emulator
-                </span>
-              </div>
-              <h2 className="text-sm font-bold text-white truncate mt-1">
-                {svc?.name || selectedNode.data.label}
-              </h2>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => duplicateNode(selectedNode.id)}
-              title="Duplicate Node"
-              className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-colors"
-            >
-              <Copy className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => deleteNode(selectedNode.id)}
-              title="Delete Node"
-              className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-rose-950/80 text-slate-300 hover:text-rose-400 transition-colors"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
+    <>
+      {/* Header */}
+      <div className="px-4 py-4 border-b border-line flex items-center gap-3">
+        <ServiceGlyph iconName={svc?.iconName || 'Server'} color={svc?.color || '#9CA1A4'} size="lg" />
+        <div className="min-w-0 flex-1" title={svc?.description}>
+          <div className="text-[14px] font-medium text-fg truncate">{svc?.name || selectedNode.data.label}</div>
+          <div className="text-[11px] font-mono text-fg-faint truncate mt-0.5">{svc?.terraformResourceType}</div>
         </div>
+        <div className="flex items-center shrink-0">
+          <IconButton onClick={() => duplicateNode(selectedNode.id)} title="Duplicate (⌘D)">
+            <Copy className="w-3.5 h-3.5" />
+          </IconButton>
+          <IconButton variant="danger" onClick={() => deleteNode(selectedNode.id)} title="Delete (⌫)">
+            <Trash2 className="w-3.5 h-3.5" />
+          </IconButton>
+        </div>
+      </div>
 
-        <p className="text-[11px] text-slate-400 leading-relaxed">
-          {svc?.description}
-        </p>
-
-        {/* Display Label & Terraform Identifier */}
-        <div className="grid grid-cols-2 gap-2 pt-1">
-          <div>
-            <label className="block text-[10px] uppercase tracking-wider text-slate-400 mb-1">
-              Display Label
-            </label>
+      {/* Identity & presence */}
+      <Section>
+        <div className={PROP_GRID}>
+          <PropRow label="Name">
             <input
               type="text"
               value={selectedNode.data.label}
-              onChange={(e) =>
-                updateNodeMetadata(selectedNode.id, { label: e.target.value })
-              }
-              className="w-full bg-[#0d1017] border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500"
+              onChange={(e) => updateNodeMetadata(selectedNode.id, { label: e.target.value })}
+              className={fieldCls}
             />
-          </div>
-          <div>
-            <label className="block text-[10px] uppercase tracking-wider text-slate-400 mb-1">
-              Terraform Resource ID
-            </label>
+          </PropRow>
+          <PropRow label="Resource ID" hint="Terraform resource name">
             <input
               type="text"
               value={selectedNode.data.resourceName}
@@ -307,189 +263,105 @@ function NodeAndEdgeInspector() {
                   resourceName: e.target.value.replace(/[^a-zA-Z0-9_]/g, '_'),
                 })
               }
-              className="w-full bg-[#0d1017] border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs font-mono text-orange-300 focus:outline-none focus:border-orange-500"
+              className={monoFieldCls}
             />
-          </div>
+          </PropRow>
+          <PropRow label="Deploy to" hint="Turn this resource off for individual environments">
+            <div className="grid grid-cols-4 gap-1 w-full">
+              {ENV_IDS.map((envId) => {
+                const env = environments[envId];
+                const enabled = selectedNode.data.envEnabled?.[envId] !== false;
+                return (
+                  <button
+                    key={envId}
+                    type="button"
+                    onClick={() => toggleNodeInEnvironment(selectedNode.id, envId)}
+                    title={`${enabled ? 'Deployed' : 'Skipped'} in ${env.name}`}
+                    className={cn(
+                      'h-7 px-1 rounded-md border text-xs inline-flex items-center justify-center gap-1 transition-colors',
+                      enabled
+                        ? 'border-line-strong bg-raised text-fg'
+                        : 'border-line text-fg-faint hover:text-fg-muted'
+                    )}
+                  >
+                    <EnvDot color={env.color} hollow={!enabled} className="w-1.5 h-1.5" />
+                    {envShort(envId)}
+                  </button>
+                );
+              })}
+            </div>
+          </PropRow>
         </div>
-      </div>
+      </Section>
 
-      {/* Environment Presence Toggles (Dev, Testing, Staging, Prod) */}
-      <div className="p-3 rounded-xl bg-[#141824] border border-slate-800/90 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-slate-200">
-            Deploy Resource in Environments
-          </span>
-          <span className="text-[10px] text-slate-400">Click to toggle</span>
-        </div>
-        <div className="grid grid-cols-4 gap-1.5">
-          {ENV_IDS.map((envId) => {
-            const env = environments[envId];
-            const enabled = selectedNode.data.envEnabled?.[envId] !== false;
-            return (
-              <button
-                key={envId}
-                type="button"
-                onClick={() => toggleNodeInEnvironment(selectedNode.id, envId)}
-                className={`py-1.5 px-2 rounded-lg text-[11px] font-semibold border flex items-center justify-center gap-1.5 transition-all ${
-                  enabled
-                    ? 'bg-slate-800/90 text-white border-slate-600'
-                    : 'bg-slate-900/40 text-slate-500 border-slate-800/60 line-through'
-                }`}
-              >
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{
-                    backgroundColor: enabled ? env.color : '#475569',
-                  }}
-                />
-                <span>{env.shortLabel}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Edit Scope Selector: Override for Active Environment vs Shared Base Config */}
-      <div className="p-3 rounded-xl bg-[#141824] border border-slate-800/90 space-y-2.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-slate-200 flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            Configuration Scope
-          </span>
-          {envOverridesCount > 0 && (
+      {/* Parameters */}
+      <Section
+        title="Configuration"
+        aside={
+          envOverridesCount > 0 && (
             <button
               type="button"
               onClick={() => resetNodeEnvOverride(selectedNode.id, activeEnv)}
-              className="text-[10px] text-amber-400 hover:text-amber-300 flex items-center gap-1"
+              className="text-xs text-fg-muted hover:text-fg flex items-center gap-1"
             >
               <RotateCcw className="w-3 h-3" />
-              Reset {envOverridesCount} {activeEnv.toUpperCase()} override(s)
+              Reset {envOverridesCount} {envShort(activeEnv)} override{envOverridesCount > 1 ? 's' : ''}
             </button>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-1.5 bg-[#0d1017] p-1 rounded-lg border border-slate-800">
-          <button
-            type="button"
-            onClick={() => setEditScope('env')}
-            className={`py-1.5 px-2.5 rounded-md text-[11px] font-medium transition-all flex items-center justify-center gap-1.5 ${
-              editScope === 'env'
-                ? 'bg-[#1f2637] text-white border border-slate-700'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <span
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: currentEnvProfile.color }}
-            />
-            <span>{activeEnv.toUpperCase()} Override</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setEditScope('base')}
-            className={`py-1.5 px-2.5 rounded-md text-[11px] font-medium transition-all flex items-center justify-center gap-1.5 ${
-              editScope === 'base'
-                ? 'bg-[#1f2637] text-white border border-slate-700'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <span>Shared Base Default</span>
-          </button>
-        </div>
-
-        <p className="text-[10px] text-slate-400">
+          )
+        }
+      >
+        <Segmented
+          value={editScope}
+          onChange={setEditScope}
+          options={[
+            {
+              value: 'env',
+              label: (
+                <>
+                  <EnvDot color={currentEnvProfile.color} className="w-1.5 h-1.5" />
+                  {envShort(activeEnv)} only
+                </>
+              ),
+            },
+            { value: 'base', label: 'All environments' },
+          ]}
+        />
+        <p className="text-[11px] text-fg-faint mt-2 mb-4">
           {editScope === 'env' ? (
             <>
-              Changes below apply specifically to{' '}
-              <strong className="text-white">{currentEnvProfile.name}</strong> (
-              <code className="text-amber-300">{activeEnv}.tfvars</code>).
+              Edits override the base value in <span className="font-mono">{activeEnv}.tfvars</span> only.
             </>
           ) : (
-            <>
-              Changes below update the shared base configuration inherited by all environments without an override.
-            </>
+            <>Edits change the base value every environment inherits unless it overrides it.</>
           )}
         </p>
-      </div>
 
-      {/* Dynamic Service Schema Fields */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-            Service Parameters ({svc?.schema.length || 0})
-          </h3>
-          <span className="text-[10px] font-mono text-slate-400">
-            Viewing: {activeEnv.toUpperCase()}
-          </span>
-        </div>
-
-        <div className="space-y-3">
+        <div className={PROP_GRID}>
           {(svc?.schema || []).map((field) => {
             const val =
               editScope === 'base'
                 ? selectedNode.data.baseConfig?.[field.key] ?? field.defaultValue
                 : resolvedConfig[field.key] ?? field.defaultValue;
-            const isOverridden = isFieldOverriddenInEnv(
-              selectedNode,
-              activeEnv,
-              field.key
-            );
+            const isOverridden = isFieldOverriddenInEnv(selectedNode, activeEnv, field.key);
 
             return (
-              <div
+              <PropRow
                 key={field.key}
-                className={`p-3 rounded-xl border transition-colors ${
-                  isOverridden
-                    ? 'bg-amber-500/5 border-amber-500/35'
-                    : 'bg-[#141824] border-slate-800/80'
+                label={field.label}
+                hint={`${field.key}${field.description ? ` · ${field.description}` : ''}${
+                  isOverridden ? `\nOverridden in ${activeEnv}` : ''
                 }`}
+                overridden={isOverridden}
               >
-                <div className="flex items-center justify-between gap-2 mb-1.5">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <label className="text-xs font-medium text-slate-200 truncate">
-                      {field.label}
-                    </label>
-                    {isOverridden && (
-                      <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                        {activeEnv.toUpperCase()} override
-                      </span>
-                    )}
-                  </div>
-
-                  {isOverridden && (
-                    <button
-                      type="button"
-                      title="Revert to shared base value"
-                      onClick={() =>
-                        resetNodeEnvOverride(selectedNode.id, activeEnv, field.key)
-                      }
-                      className="text-[10px] text-slate-400 hover:text-amber-300 flex items-center gap-0.5 shrink-0"
-                    >
-                      <RotateCcw className="w-2.5 h-2.5" />
-                      <span>Revert</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Input Control by FieldType */}
                 {field.type === 'boolean' ? (
-                  <label className="flex items-center justify-between cursor-pointer pt-0.5">
-                    <span className="text-[11px] font-mono text-slate-400">
-                      {field.key} = {Boolean(val) ? 'true' : 'false'}
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(val)}
-                      onChange={(e) => handleFieldValueChange(field, e.target.checked)}
-                      className="w-4 h-4 accent-orange-500 rounded cursor-pointer"
-                    />
-                  </label>
+                  <div className="h-7 flex items-center flex-1">
+                    <Switch checked={Boolean(val)} onChange={(next) => handleFieldValueChange(field, next)} />
+                  </div>
                 ) : field.type === 'select' ? (
                   <select
                     value={String(val ?? '')}
                     onChange={(e) => handleFieldValueChange(field, e.target.value)}
-                    className="w-full bg-[#0d1017] border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-orange-500"
+                    className={monoFieldCls}
                   >
                     {(field.options || []).map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -501,53 +373,94 @@ function NodeAndEdgeInspector() {
                   <input
                     type="number"
                     value={Number(val ?? 0)}
-                    onChange={(e) =>
-                      handleFieldValueChange(field, Number(e.target.value))
-                    }
-                    className="w-full bg-[#0d1017] border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-orange-500"
+                    onChange={(e) => handleFieldValueChange(field, Number(e.target.value))}
+                    className={monoFieldCls}
                   />
                 ) : field.type === 'json' ? (
                   <textarea
-                    rows={2}
-                    value={
-                      typeof val === 'string' ? val : JSON.stringify(val, null, 2)
-                    }
+                    rows={3}
+                    value={typeof val === 'string' ? val : JSON.stringify(val, null, 2)}
                     onChange={(e) => handleFieldValueChange(field, e.target.value)}
-                    className="w-full bg-[#0d1017] border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-emerald-300 font-mono focus:outline-none focus:border-orange-500"
+                    className={cn(monoFieldCls, 'resize-y leading-relaxed')}
                   />
                 ) : (
                   <input
                     type="text"
                     value={String(val ?? '')}
+                    placeholder={field.placeholder}
                     onChange={(e) => handleFieldValueChange(field, e.target.value)}
-                    className="w-full bg-[#0d1017] border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-orange-500"
+                    className={monoFieldCls}
                   />
                 )}
 
-                {field.description && (
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    {field.description}
-                  </p>
+                {isOverridden && (
+                  <IconButton
+                    title="Revert to base value"
+                    onClick={() => resetNodeEnvOverride(selectedNode.id, activeEnv, field.key)}
+                    className="w-6 h-7"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                  </IconButton>
                 )}
-              </div>
+              </PropRow>
             );
           })}
         </div>
-      </div>
+      </Section>
+
+      {/* Arguments the form does not model, written straight into the resource block */}
+      <Section
+        title={
+          <span className="flex items-center gap-1.5">
+            {isFieldOverriddenInEnv(selectedNode, activeEnv, EXTRA_HCL_KEY) && (
+              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+            )}
+            Extra HCL
+          </span>
+        }
+        aside={
+          isFieldOverriddenInEnv(selectedNode, activeEnv, EXTRA_HCL_KEY) && (
+            <button
+              type="button"
+              onClick={() => resetNodeEnvOverride(selectedNode.id, activeEnv, EXTRA_HCL_KEY)}
+              className="text-xs text-fg-muted hover:text-fg flex items-center gap-1"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Revert to base
+            </button>
+          )
+        }
+      >
+        <textarea
+          value={String(
+            (editScope === 'base' ? selectedNode.data.baseConfig?.[EXTRA_HCL_KEY] : resolvedConfig[EXTRA_HCL_KEY]) ?? ''
+          )}
+          onChange={(e) =>
+            updateNodeProperty(selectedNode.id, EXTRA_HCL_KEY, e.target.value, editScope === 'env' ? activeEnv : 'base')
+          }
+          rows={4}
+          spellCheck={false}
+          placeholder={'publish = true\n\nlifecycle {\n  prevent_destroy = true\n}'}
+          className={cn(monoFieldCls, 'p-3 text-[11.5px] leading-relaxed resize-y')}
+        />
+        <p className="text-[11px] text-fg-faint mt-2">
+          Added inside the <span className="font-mono">{svc?.terraformResourceType}</span> block as written, for{' '}
+          {editScope === 'env' ? `${envShort(activeEnv)} only` : 'all environments'}. Don't repeat arguments the
+          form already sets.
+        </p>
+      </Section>
 
       {/* Lambda handler source, zipped into artifacts/<name>.zip on every sync */}
       {selectedNode.data.serviceType === 'aws_lambda_function' && (
-        <div className="p-3 rounded-xl bg-[#141824] border border-slate-800/90 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-              <FileCode className="w-3.5 h-3.5 text-orange-400" />
-              Handler code
-            </span>
-            <span className="text-[10px] font-mono text-slate-400">
+        <Section
+          title="Handler code"
+          aside={
+            <span className="text-[11px] font-mono text-fg-faint">
               {String(resolvedConfig.handler || 'index.handler').split('.').slice(0, -1).join('.') || 'index'}.
               {String(resolvedConfig.runtime || 'nodejs20.x').startsWith('python') ? 'py' : 'mjs'}
             </span>
-          </div>
+          }
+        >
           <textarea
             value={selectedNode.data.inlineCode || ''}
             onChange={(e) => updateNodeMetadata(selectedNode.id, { inlineCode: e.target.value })}
@@ -563,78 +476,83 @@ function NodeAndEdgeInspector() {
             rows={12}
             spellCheck={false}
             placeholder="Leave empty to deploy a default echo handler"
-            className="w-full bg-[#080a0f] border border-slate-700/80 rounded-lg p-2.5 text-[11px] leading-relaxed text-emerald-200 font-mono focus:outline-none focus:border-orange-500"
+            className={cn(monoFieldCls, 'p-3 text-[11.5px] leading-relaxed resize-y')}
           />
-          <p className="text-[10px] text-slate-400">
-            Shared by every environment. Packaged on Sync TF / Apply into{' '}
-            <code className="text-slate-300">environments/&lt;env&gt;/artifacts/</code>.
+          <p className="text-[11px] text-fg-faint mt-2">
+            Shared by every environment. Zipped into{' '}
+            <span className="font-mono">environments/&lt;env&gt;/artifacts/</span> on sync and apply.
           </p>
-        </div>
+        </Section>
       )}
 
       {/* Live outputs captured after terraform apply */}
       {selectedNode.data.provisionedOutputs?.[activeEnv] && (
-        <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/25 space-y-1.5">
-          <span className="text-xs font-semibold text-emerald-300 flex items-center gap-1.5">
-            <Radio className="w-3.5 h-3.5" />
-            Live in {activeEnv.toUpperCase()}
-          </span>
-          {Object.entries(selectedNode.data.provisionedOutputs[activeEnv]!).map(([k, v]) => (
-            <div key={k} className="flex items-start justify-between gap-3 text-[10.5px]">
-              <span className="text-slate-400 shrink-0">{k}</span>
-              <code className="text-slate-100 font-mono break-all text-right select-text">{v}</code>
-            </div>
-          ))}
-        </div>
+        <Section
+          title={
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-ok" />
+              Outputs in {envShort(activeEnv)}
+            </span>
+          }
+        >
+          <dl className="space-y-1.5">
+            {Object.entries(selectedNode.data.provisionedOutputs[activeEnv]!).map(([k, v]) => (
+              <div key={k} className="grid grid-cols-[112px_minmax(0,1fr)] gap-3 text-xs">
+                <dt className="text-fg-muted truncate">{k}</dt>
+                <dd className="font-mono text-[11px] text-fg break-all select-text">{v}</dd>
+              </div>
+            ))}
+          </dl>
+        </Section>
       )}
 
-      {/* Resource Tags Editor */}
-      <div className="p-3 rounded-xl bg-[#141824] border border-slate-800/90 space-y-2.5">
-        <span className="text-xs font-semibold text-slate-200 block">
-          Resource AWS Tags
-        </span>
-        <div className="flex flex-wrap gap-1.5">
-          {Object.entries(selectedNode.data.tags || {}).map(([k, v]) => (
-            <span
-              key={k}
-              className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md bg-[#0d1017] border border-slate-700 text-slate-200"
-            >
-              <span className="text-orange-400">{k}:</span> {v}
-              <button
-                type="button"
-                onClick={() => removeTag(k)}
-                className="text-slate-500 hover:text-rose-400 ml-0.5"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          ))}
-        </div>
-        <div className="flex items-center gap-1.5 pt-1">
+      {/* Tags */}
+      <Section title="Tags">
+        {tags.length > 0 && (
+          <div className="mb-3 space-y-1">
+            {tags.map(([k, v]) => (
+              <div key={k} className="group grid grid-cols-[112px_minmax(0,1fr)_auto] gap-3 items-center h-6 text-xs font-mono">
+                <span className="text-fg-muted truncate">{k}</span>
+                <span className="text-fg truncate">{v}</span>
+                <button
+                  type="button"
+                  onClick={() => removeTag(k)}
+                  title={`Remove ${k}`}
+                  className="text-fg-faint hover:text-err opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <form
+          className="flex items-center gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            addTag();
+          }}
+        >
           <input
             type="text"
-            placeholder="Tag key"
+            placeholder="key"
             value={newTagKey}
             onChange={(e) => setNewTagKey(e.target.value)}
-            className="w-1/2 bg-[#0d1017] border border-slate-700/80 rounded-lg px-2 py-1 text-xs text-white font-mono"
+            className={monoFieldCls}
           />
           <input
             type="text"
-            placeholder="Tag value"
+            placeholder="value"
             value={newTagVal}
             onChange={(e) => setNewTagVal(e.target.value)}
-            className="w-1/2 bg-[#0d1017] border border-slate-700/80 rounded-lg px-2 py-1 text-xs text-white font-mono"
+            className={monoFieldCls}
           />
-          <button
-            type="button"
-            onClick={addTag}
-            className="p-1.5 rounded-lg bg-orange-500 hover:bg-orange-400 text-slate-950 shrink-0"
-          >
+          <IconButton type="submit" title="Add tag" disabled={!newTagKey.trim()} className="border border-line">
             <Plus className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-    </div>
+          </IconButton>
+        </form>
+      </Section>
+    </>
   );
 }
 
@@ -654,76 +572,55 @@ function MultiEnvMatrixPanel() {
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) || nodes[0];
   const svc = selectedNode ? SERVICE_BY_TYPE[selectedNode.data.serviceType] : null;
 
+  const th = 'h-8 px-2 text-left text-[11px] font-normal text-fg-faint';
+
   return (
-    <div className="p-4 space-y-5">
-      {/* Environment Profiles Overview & Port Allocation */}
-      <div className="space-y-2.5">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-            Simultaneous Environment Profiles
-          </h3>
-          <span className="text-[10px] font-mono text-slate-400">
-            Isolated Ports & Regions
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          {ENV_IDS.map((envId) => {
-            const env = environments[envId];
-            const isActive = activeEnv === envId;
-            return (
-              <div
-                key={envId}
-                onClick={() => setActiveEnv(envId)}
-                className={`p-3 rounded-xl border cursor-pointer transition-all space-y-2 ${
-                  isActive
-                    ? 'bg-[#181e2e] border-orange-500/60 shadow-md'
-                    : 'bg-[#141824] border-slate-800/80 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="w-2.5 h-2.5 rounded-full"
-                      style={{ backgroundColor: env.color }}
-                    />
-                    <span className="text-xs font-bold text-white">
+    <>
+      {/* Environment profiles */}
+      <Section title="Environments">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="border-b border-line">
+              <th className={cn(th, 'pl-0')}>Name</th>
+              <th className={th}>Region</th>
+              <th className={cn(th, 'pr-0')}>Emulator port</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ENV_IDS.map((envId) => {
+              const env = environments[envId];
+              const isActive = activeEnv === envId;
+              return (
+                <tr key={envId} className="border-b border-line last:border-b-0">
+                  <td className="py-1.5 pr-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveEnv(envId)}
+                      className={cn(
+                        'flex items-center gap-2 text-[13px]',
+                        isActive ? 'text-fg' : 'text-fg-muted hover:text-fg'
+                      )}
+                    >
+                      <EnvDot color={env.color} />
                       {env.name}
-                    </span>
-                  </div>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-900 text-slate-300">
-                    :{env.emulatorPort}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5 pt-1">
-                  <div>
-                    <label className="block text-[9px] uppercase text-slate-400">
-                      AWS Region
-                    </label>
+                    </button>
+                  </td>
+                  <td className="py-1.5 px-2 w-[128px]">
                     <select
                       value={env.region}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) =>
-                        updateEnvironmentProfile(envId, { region: e.target.value })
-                      }
-                      className="w-full mt-0.5 bg-[#0d1017] border border-slate-700/80 rounded px-1.5 py-1 text-[10px] font-mono text-slate-200"
+                      onChange={(e) => updateEnvironmentProfile(envId, { region: e.target.value })}
+                      className={cn(monoFieldCls, 'py-1 text-[11px]')}
                     >
                       <option value="us-east-1">us-east-1</option>
                       <option value="us-west-2">us-west-2</option>
                       <option value="eu-west-1">eu-west-1</option>
                       <option value="ap-southeast-1">ap-southeast-1</option>
                     </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[9px] uppercase text-slate-400">
-                      Emulator Port
-                    </label>
+                  </td>
+                  <td className="py-1.5 pl-2 w-[88px]">
                     <input
                       type="number"
                       value={env.emulatorPort}
-                      onClick={(e) => e.stopPropagation()}
                       onChange={(e) => {
                         const p = Number(e.target.value) || 9297;
                         updateEnvironmentProfile(envId, {
@@ -731,133 +628,112 @@ function MultiEnvMatrixPanel() {
                           emulatorEndpoint: `https://127.0.0.1:${p}`,
                         });
                       }}
-                      className="w-full mt-0.5 bg-[#0d1017] border border-slate-700/80 rounded px-1.5 py-1 text-[10px] font-mono text-orange-300"
+                      className={cn(monoFieldCls, 'py-1 text-[11px]')}
                     />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Section>
 
-      {/* Resource Availability Matrix Table across all 4 Environments */}
-      <div className="space-y-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-          Resource Topology Matrix ({nodes.length} Nodes)
-        </h3>
-        <div className="rounded-xl border border-slate-800 overflow-hidden bg-[#141824]">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-800 bg-[#0d1017] text-[10px] font-mono uppercase text-slate-400">
-                <th className="py-2 px-2.5">Resource</th>
-                <th className="py-2 px-1.5 text-center text-sky-400">DEV</th>
-                <th className="py-2 px-1.5 text-center text-purple-400">TEST</th>
-                <th className="py-2 px-1.5 text-center text-amber-400">STG</th>
-                <th className="py-2 px-1.5 text-center text-emerald-400">PROD</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60 text-xs">
-              {nodes.map((node) => {
-                const isSelected = selectedNode?.id === node.id;
-                return (
-                  <tr
-                    key={node.id}
-                    onClick={() => selectNode(node.id)}
-                    className={`cursor-pointer transition-colors ${
-                      isSelected ? 'bg-orange-500/10' : 'hover:bg-slate-800/40'
-                    }`}
-                  >
-                    <td className="py-2 px-2.5">
-                      <div className="font-medium text-slate-200 truncate max-w-[175px]">
-                        {node.data.label}
-                      </div>
-                      <div className="text-[10px] font-mono text-slate-400 truncate max-w-[175px]">
-                        {node.data.serviceType}
-                      </div>
-                    </td>
-                    {ENV_IDS.map((envId) => {
-                      const enabled = node.data.envEnabled?.[envId] !== false;
-                      const overridesCount = Object.keys(
-                        node.data.envOverrides?.[envId] || {}
-                      ).length;
-                      return (
-                        <td key={envId} className="py-2 px-1.5 text-center">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleNodeInEnvironment(node.id, envId);
-                            }}
-                            className={`w-6 h-6 rounded-md text-[10px] font-mono font-bold inline-flex items-center justify-center border transition-all ${
-                              enabled
-                                ? overridesCount > 0
-                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                                  : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                                : 'bg-slate-900 text-slate-600 border-slate-800'
-                            }`}
-                            title={
-                              enabled
-                                ? overridesCount > 0
-                                  ? `Enabled with ${overridesCount} override(s)`
-                                  : 'Enabled (Base defaults)'
-                                : 'Disabled in this environment'
-                            }
-                          >
-                            {enabled ? (overridesCount > 0 ? `${overridesCount}*` : '✓') : '—'}
-                          </button>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* Which resource ships where */}
+      <Section title={`Resources · ${nodes.length}`}>
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="border-b border-line">
+              <th className={cn(th, 'pl-0')}>Resource</th>
+              {ENV_IDS.map((envId) => (
+                <th key={envId} className={cn(th, 'text-center w-12 px-0')}>
+                  {envShort(envId)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map((node) => {
+              const isSelected = selectedNode?.id === node.id;
+              return (
+                <tr
+                  key={node.id}
+                  onClick={() => selectNode(node.id)}
+                  className={cn(
+                    'cursor-pointer border-b border-line last:border-b-0 transition-colors',
+                    isSelected ? 'bg-raised' : 'hover:bg-raised/60'
+                  )}
+                >
+                  <td className="py-1.5 pr-2">
+                    <div className={cn('text-xs truncate max-w-[180px]', isSelected ? 'text-fg' : 'text-fg-muted')}>
+                      {node.data.label}
+                    </div>
+                  </td>
+                  {ENV_IDS.map((envId) => {
+                    const enabled = node.data.envEnabled?.[envId] !== false;
+                    const overridesCount = Object.keys(node.data.envOverrides?.[envId] || {}).length;
+                    return (
+                      <td key={envId} className="py-1 text-center">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleNodeInEnvironment(node.id, envId);
+                          }}
+                          title={
+                            enabled
+                              ? overridesCount > 0
+                                ? `Deployed with ${overridesCount} override(s)`
+                                : 'Deployed with base values'
+                              : 'Skipped in this environment'
+                          }
+                          className="w-8 h-6 rounded inline-flex items-center justify-center gap-1 hover:bg-overlay"
+                        >
+                          <EnvDot color={environments[envId].color} hollow={!enabled} className="w-1.5 h-1.5" />
+                          {enabled && overridesCount > 0 && (
+                            <span className="text-[10px] font-mono text-accent">{overridesCount}</span>
+                          )}
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="text-[11px] text-fg-faint mt-3">
+          Click a dot to turn a resource on or off. Numbers count overridden parameters.
+        </p>
+      </Section>
 
-      {/* Selected Resource Side-by-Side Parameter Diff Table */}
+      {/* Side-by-side parameter diff for the selected resource */}
       {selectedNode && svc && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-              4-Env Parameter Diff: {selectedNode.data.label}
-            </h3>
-          </div>
-          <div className="rounded-xl border border-slate-800 overflow-x-auto bg-[#141824]">
-            <table className="w-full text-left border-collapse text-[11px]">
+        <Section title={`Compare · ${selectedNode.data.label}`}>
+          <div className="overflow-x-auto -mx-1">
+            <table className="w-full border-collapse font-mono text-[11px]">
               <thead>
-                <tr className="border-b border-slate-800 bg-[#0d1017] text-[10px] font-mono text-slate-400">
-                  <th className="py-2 px-2">Parameter</th>
+                <tr className="border-b border-line">
+                  <th className={cn(th, 'font-sans')}>Parameter</th>
                   {ENV_IDS.map((e) => (
-                    <th key={e} className="py-2 px-2 uppercase">
-                      {e}
+                    <th key={e} className={cn(th, 'font-sans')}>
+                      {envShort(e)}
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono text-[10px]">
+              <tbody>
                 {svc.schema.map((field) => (
-                  <tr key={field.key}>
-                    <td className="py-2 px-2 font-sans text-[11px] text-slate-300 font-medium">
+                  <tr key={field.key} className="border-b border-line last:border-b-0">
+                    <td className="py-1.5 px-2 text-fg-muted truncate max-w-[110px]" title={field.key}>
                       {field.key}
                     </td>
                     {ENV_IDS.map((envId) => {
                       const val = resolveNodeConfigForEnv(selectedNode, envId)[field.key];
-                      const isOver = isFieldOverriddenInEnv(
-                        selectedNode,
-                        envId,
-                        field.key
-                      );
+                      const isOver = isFieldOverriddenInEnv(selectedNode, envId, field.key);
                       return (
                         <td
                           key={envId}
-                          className={`py-2 px-2 truncate max-w-[85px] ${
-                            isOver
-                              ? 'text-amber-300 font-semibold bg-amber-500/10'
-                              : 'text-slate-400'
-                          }`}
+                          className={cn('py-1.5 px-2 truncate max-w-[64px]', isOver ? 'text-accent' : 'text-fg-faint')}
                           title={String(val)}
                         >
                           {String(val)}
@@ -869,15 +745,34 @@ function MultiEnvMatrixPanel() {
               </tbody>
             </table>
           </div>
-        </div>
+        </Section>
       )}
-    </div>
+    </>
   );
 }
 
 // ============================================================================
 // 3. LIVE TERRAFORM HCL CODE VIEWER & COMPILER PANEL
 // ============================================================================
+const HCL_BLOCK = /^(resource|data|variable|output|provider|terraform|locals|module)\b/;
+
+function HclLine({ line }: { line: string }) {
+  const trimmed = line.trimStart();
+  if (trimmed.startsWith('#') || trimmed.startsWith('//')) {
+    return <span className="text-fg-faint">{line}</span>;
+  }
+  const block = line.match(HCL_BLOCK);
+  if (block) {
+    return (
+      <>
+        <span className="text-info">{block[0]}</span>
+        {line.slice(block[0].length)}
+      </>
+    );
+  }
+  return <>{line || ' '}</>;
+}
+
 function LiveTerraformPanel() {
   const nodes = useCloudStore((s) => s.nodes);
   const edges = useCloudStore((s) => s.edges);
@@ -921,45 +816,26 @@ function LiveTerraformPanel() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const lines = codeContent.split('\n');
+
   return (
     <div className="flex flex-col h-full">
-      {/* File Switcher Bar */}
-      <div className="p-3 border-b border-slate-800/80 bg-[#11141d] space-y-2.5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: environments[activeEnv].color }}
-            />
-            <span className="text-xs font-bold text-white">
-              environments/{activeEnv}/
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 transition-colors"
-          >
-            {copied ? (
-              <>
-                <Check className="w-3 h-3 text-emerald-400" />
-                <span>Copied HCL</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3 h-3" />
-                <span>Copy File</span>
-              </>
-            )}
-          </button>
+      <div className="shrink-0 border-b border-line">
+        <div className="h-9 px-4 flex items-center justify-between">
+          <span className="text-[11px] font-mono text-fg-faint truncate">
+            terraform-out/environments/{activeEnv}/{selectedFile === 'tfvars' ? `${activeEnv}.tfvars` : selectedFile}
+          </span>
+          <Button variant="ghost" onClick={handleCopy} className="-mr-2">
+            {copied ? <Check className="w-3.5 h-3.5 text-ok" /> : <Copy className="w-3.5 h-3.5" />}
+            {copied ? 'Copied' : 'Copy'}
+          </Button>
         </div>
-
-        <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+        <div className="px-2 flex items-stretch overflow-x-auto">
           {(
             [
               { id: 'main.tf', label: 'main.tf' },
               { id: 'provider.tf', label: 'provider.tf' },
-              { id: 'tfvars', label: `${activeEnv}.tfvars` },
+              { id: 'tfvars', label: 'tfvars' },
               { id: 'variables.tf', label: 'variables.tf' },
               { id: 'outputs.tf', label: 'outputs.tf' },
             ] as const
@@ -968,22 +844,28 @@ function LiveTerraformPanel() {
               key={f.id}
               type="button"
               onClick={() => setSelectedFile(f.id)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-mono transition-colors shrink-0 ${
-                selectedFile === f.id
-                  ? 'bg-orange-500/20 text-orange-300 border border-orange-500/40 font-semibold'
-                  : 'bg-[#141824] text-slate-400 hover:text-slate-200 border border-slate-800'
-              }`}
+              className={cn(
+                'relative h-8 px-1.5 text-[11px] font-mono shrink-0 transition-colors',
+                selectedFile === f.id ? 'text-fg' : 'text-fg-faint hover:text-fg-muted'
+              )}
             >
               {f.label}
+              {selectedFile === f.id && <span className="absolute left-1.5 right-1.5 -bottom-px h-px bg-fg" />}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Code Viewer */}
-      <div className="flex-1 overflow-auto p-3.5 bg-[#080a0f] font-mono text-[11px] leading-relaxed select-text">
-        <pre className="text-slate-200 whitespace-pre overflow-x-auto">
-          {codeContent}
+      <div className="flex-1 overflow-auto bg-base py-3 font-mono text-[11.5px] leading-[1.7] select-text">
+        <pre className="text-fg/90">
+          {lines.map((line, i) => (
+            <div key={i} className="flex">
+              <span className="w-10 pr-4 text-right text-fg-faint/60 select-none shrink-0 tabular-nums">{i + 1}</span>
+              <span className="whitespace-pre pr-4">
+                <HclLine line={line} />
+              </span>
+            </div>
+          ))}
         </pre>
       </div>
     </div>
@@ -1031,147 +913,76 @@ function AwsEmulatorCommandCenter() {
   };
 
   return (
-    <div className="p-4 space-y-4">
-      <RunnerConsole />
+    <>
+      <Section>
+        <RunnerConsole />
+      </Section>
 
-      {/* Official AWS Emulator Banner */}
-      <div className="p-3.5 rounded-xl bg-gradient-to-br from-[#141a29] to-[#11141d] border border-slate-800 space-y-2.5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-xs font-bold text-white">
-              AWS Emulator Integration
-            </h3>
+      {/* Health of every environment's emulator port */}
+      <Section
+        title="Emulators"
+        aside={
+          <div className="flex items-center gap-1 -mr-2">
+            <a
+              href="https://github.com/aws/aws-emulator"
+              target="_blank"
+              rel="noreferrer"
+              className="h-7 px-2 rounded-md text-xs text-fg-muted hover:text-fg hover:bg-raised flex items-center gap-1"
+            >
+              aws/aws-emulator <ExternalLink className="w-3 h-3" />
+            </a>
+            <IconButton onClick={() => refreshEmulatorStatuses()} title="Check ports">
+              <RefreshCw className="w-3.5 h-3.5" />
+            </IconButton>
           </div>
-          <a
-            href="https://github.com/aws/aws-emulator"
-            target="_blank"
-            rel="noreferrer"
-            className="text-[10px] font-mono text-orange-400 hover:underline flex items-center gap-1"
-          >
-            <span>aws/aws-emulator</span>
-            <ExternalLink className="w-2.5 h-2.5" />
-          </a>
+        }
+      >
+        <div className="divide-y divide-line">
+          {ENV_IDS.map((id) => {
+            const env = environments[id];
+            const isOnline = emulatorStatuses[env.emulatorPort]?.running;
+            return (
+              <div key={id} className="h-8 flex items-center gap-2.5 text-xs">
+                <EnvDot color={env.color} />
+                <span className={id === activeEnv ? 'text-fg' : 'text-fg-muted'}>{env.name}</span>
+                <span className="font-mono text-[11px] text-fg-faint">:{env.emulatorPort}</span>
+                <span className={cn('ml-auto flex items-center gap-1.5', isOnline ? 'text-fg-muted' : 'text-fg-faint')}>
+                  <span className={cn('w-1.5 h-1.5 rounded-full', isOnline ? 'bg-ok' : 'bg-fg-faint/50')} />
+                  {isOnline ? 'running' : 'stopped'}
+                </span>
+              </div>
+            );
+          })}
         </div>
-
-        <p className="text-[11px] text-slate-300 leading-relaxed">
-          AWS Emulator serves a local HTTPS endpoint per environment (default port{' '}
-          <code className="text-orange-300">9297</code>) with SigV4 credentials and a local CA certificate at{' '}
-          <code className="text-emerald-300">~/.aws/emulator/&lt;port&gt;/</code>.
+        <p className="text-[11px] text-fg-faint mt-3">
+          Each emulator serves HTTPS with a local CA in{' '}
+          <span className="font-mono">~/.aws/emulator/&lt;port&gt;/</span>.
         </p>
+      </Section>
 
-        {/* Live Health Status across all 4 environment ports */}
-        <div className="pt-1 space-y-1.5">
-          <div className="flex items-center justify-between text-[10px] text-slate-400">
-            <span>Multi-Env Emulator Endpoints (`/__admin/health`)</span>
-            <button
-              type="button"
-              onClick={() => refreshEmulatorStatuses()}
-              className="text-slate-300 hover:text-white flex items-center gap-1"
-            >
-              <RefreshCw className="w-3 h-3" /> Check Ports
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5">
-            {ENV_IDS.map((id) => {
-              const env = environments[id];
-              const st = emulatorStatuses[env.emulatorPort];
-              const isOnline = st?.running;
-              return (
-                <div
-                  key={id}
-                  className="px-2.5 py-1.5 rounded-lg bg-[#0d1017] border border-slate-800 flex items-center justify-between text-[11px]"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        isOnline ? 'bg-emerald-400' : 'bg-slate-600'
-                      }`}
-                    />
-                    <span className="font-semibold text-slate-200">
-                      {env.shortLabel}
-                    </span>
-                    <span className="font-mono text-[10px] text-slate-400">
-                      :{env.emulatorPort}
-                    </span>
-                  </div>
-                  <span
-                    className={`text-[10px] font-mono ${
-                      isOnline ? 'text-emerald-400' : 'text-slate-500'
-                    }`}
-                  >
-                    {isOnline ? 'OK (200)' : 'Standby'}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Script & Container Switcher */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1 bg-[#141824] p-1 rounded-lg border border-slate-800">
-            <button
-              type="button"
-              onClick={() => setArtifactTab('shell')}
-              className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                artifactTab === 'shell'
-                  ? 'bg-orange-500 text-slate-950 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              SDK & CLI Env ({activeEnv})
-            </button>
-            <button
-              type="button"
-              onClick={() => setArtifactTab('compose')}
-              className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                artifactTab === 'compose'
-                  ? 'bg-orange-500 text-slate-950 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              4-Env Docker Compose
-            </button>
-            <button
-              type="button"
-              onClick={() => setArtifactTab('dockerfile')}
-              className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                artifactTab === 'dockerfile'
-                  ? 'bg-orange-500 text-slate-950 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Dockerfile
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={copySnippet}
-            className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
-          >
-            {copied ? (
-              <>
-                <Check className="w-3 h-3 text-emerald-400" />
-                <span>Copied</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3 h-3" />
-                <span>Copy</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-[#080a0f] p-3 font-mono text-[10.5px] leading-relaxed select-text overflow-x-auto">
-          <pre className="text-slate-200 whitespace-pre">{activeSnippet}</pre>
-        </div>
-      </div>
-    </div>
+      {/* Shell / compose / Dockerfile snippets */}
+      <Section
+        title="Setup files"
+        aside={
+          <Button variant="ghost" onClick={copySnippet} className="-mr-2">
+            {copied ? <Check className="w-3.5 h-3.5 text-ok" /> : <Copy className="w-3.5 h-3.5" />}
+            {copied ? 'Copied' : 'Copy'}
+          </Button>
+        }
+      >
+        <Segmented
+          value={artifactTab}
+          onChange={setArtifactTab}
+          options={[
+            { value: 'shell', label: `Shell env · ${envShort(activeEnv)}` },
+            { value: 'compose', label: 'docker-compose' },
+            { value: 'dockerfile', label: 'Dockerfile' },
+          ]}
+        />
+        <pre className="mt-3 rounded-md border border-line bg-base p-3 font-mono text-[11px] leading-relaxed text-fg/90 select-text overflow-x-auto max-h-96">
+          {activeSnippet}
+        </pre>
+      </Section>
+    </>
   );
 }

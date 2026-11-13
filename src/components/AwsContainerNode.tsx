@@ -4,7 +4,9 @@ import type { CloudNode } from '../types/cloud';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import { useCloudStore } from '../store/useCloudStore';
 import { AwsServiceIcon } from './AwsServiceIcon';
-import { CheckCircle2, Copy, EyeOff, Loader2, Trash2, AlertTriangle } from 'lucide-react';
+import { Copy, Loader2, Trash2 } from 'lucide-react';
+import { cn } from './ui';
+import { PLAN_ACTION_STYLE } from './PlanReviewBar';
 
 /**
  * Resizable VPC / Subnet group. Resources dragged inside become children
@@ -18,9 +20,12 @@ export const AwsContainerNode = memo(({ id, data, selected }: NodeProps<CloudNod
   const deleteNode = useCloudStore((s) => s.deleteNode);
   const pushHistory = useCloudStore((s) => s.pushHistory);
   const childCount = useCloudStore((s) => s.nodes.filter((n) => n.parentId === id).length);
+  const plannedAction = useCloudStore((s) =>
+    s.pendingPlan?.envId === s.activeEnv ? s.pendingPlan.byNode[id] : undefined
+  );
 
   const svc = SERVICE_BY_TYPE[data.serviceType];
-  const color = svc?.color || '#8b5cf6';
+  const color = svc?.color || '#8E8CD8';
   const isSubnet = data.serviceType === 'aws_subnet';
   const isSelected = selected || selectedNodeId === id;
   const isEnabled = data.envEnabled?.[activeEnv] !== false;
@@ -37,87 +42,71 @@ export const AwsContainerNode = memo(({ id, data, selected }: NodeProps<CloudNod
         e.stopPropagation();
         selectNode(id);
       }}
-      className={`group relative w-full h-full rounded-2xl transition-[opacity,box-shadow] duration-150 ${
-        isEnabled ? 'opacity-100' : 'opacity-45'
-      }`}
-      style={{
-        background: isSubnet ? `${color}0d` : `${color}08`,
-        border: `1.5px dashed ${isSelected ? color : `${color}66`}`,
-        boxShadow: isSelected ? `0 0 0 3px ${color}22` : undefined,
-      }}
+      className={cn(
+        'group relative w-full h-full rounded-xl border border-dashed transition-[opacity,border-color] duration-150',
+        isSubnet ? 'bg-white/[0.02]' : 'bg-white/[0.012]',
+        isSelected ? 'border-accent' : 'border-line-strong hover:border-fg-faint',
+        !isEnabled && 'opacity-40'
+      )}
     >
       <NodeResizer
         isVisible={isSelected}
         minWidth={isSubnet ? 300 : 360}
         minHeight={isSubnet ? 200 : 240}
-        color={color}
+        color="#E8C400"
         onResizeStart={() => pushHistory()}
-        handleStyle={{ width: 9, height: 9, borderRadius: 3 }}
+        handleStyle={{ width: 8, height: 8, borderRadius: 2 }}
         lineStyle={{ borderColor: 'transparent' }}
       />
 
-      <Handle type="target" position={Position.Left} className="!w-3 !h-3" style={{ background: color }} />
+      <Handle type="target" position={Position.Left} />
 
       {/* Header strip */}
-      <div className="absolute top-0 inset-x-0 px-3 py-2 flex items-center justify-between gap-2 cursor-grab">
+      <div className="absolute top-0 inset-x-0 h-10 px-3.5 flex items-center justify-between gap-3 cursor-grab">
         <div className="flex items-center gap-2 min-w-0">
-          <div
-            className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 border"
-            style={{ backgroundColor: `${color}20`, borderColor: `${color}55`, color }}
-          >
+          <span style={{ color }} className="shrink-0">
             <AwsServiceIcon iconName={svc?.iconName || 'Network'} className="w-3.5 h-3.5" />
-          </div>
-          <span
-            className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
-            style={{ backgroundColor: `${color}22`, color }}
-          >
-            {svc?.shortName}
           </span>
-          <span className="text-xs font-semibold text-slate-100 truncate">{data.label}</span>
+          <span className="text-xs text-fg-muted shrink-0">{svc?.shortName}</span>
+          <span className="text-[13px] font-medium text-fg truncate">{data.label}</span>
           {tier && (
-            <span
-              className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
-                tier === 'public'
-                  ? 'bg-sky-500/10 text-sky-300 border-sky-500/30'
-                  : 'bg-slate-700/30 text-slate-300 border-slate-600/50'
-              }`}
-            >
-              {tier}
-            </span>
+            <span className="text-[11px] text-fg-faint px-1.5 rounded border border-line shrink-0">{tier}</span>
           )}
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0 font-mono text-[11px]">
           <span
-            className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-              isOverridden('cidr_block')
-                ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                : 'text-slate-300 bg-slate-900/60'
-            }`}
-            title={`CIDR in ${activeEnv.toUpperCase()}`}
+            className={isOverridden('cidr_block') ? 'text-accent' : 'text-fg-muted'}
+            title={`CIDR in ${activeEnv}${isOverridden('cidr_block') ? ' (override)' : ''}`}
           >
             {String(cfg.cidr_block || '—')}
           </span>
           {isSubnet && cfg.availability_zone && (
-            <span className="text-[10px] font-mono text-slate-400">{String(cfg.availability_zone)}</span>
+            <span className="text-fg-faint">{String(cfg.availability_zone)}</span>
           )}
-          {provState === 'provisioning' || provState === 'planning' ? (
-            <Loader2 className="w-3 h-3 animate-spin text-amber-300" />
+          {!isEnabled ? (
+            <span className="font-sans text-fg-faint">skipped in {activeEnv}</span>
+          ) : plannedAction ? (
+            <span className={PLAN_ACTION_STYLE[plannedAction].text}>
+              {PLAN_ACTION_STYLE[plannedAction].symbol} {PLAN_ACTION_STYLE[plannedAction].label}
+            </span>
+          ) : provState === 'provisioning' || provState === 'planning' ? (
+            <Loader2 className="w-3 h-3 animate-spin text-warn" />
           ) : provState === 'provisioned' ? (
-            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+            <span className="w-1.5 h-1.5 rounded-full bg-ok" title={`Applied in ${activeEnv}`} />
           ) : provState === 'failed' ? (
-            <AlertTriangle className="w-3 h-3 text-rose-400" />
+            <span className="w-1.5 h-1.5 rounded-full bg-err" title={`Failed in ${activeEnv}`} />
           ) : null}
 
-          <div className="hidden group-hover:flex items-center gap-0.5">
+          <div className="hidden group-hover:flex items-center">
             <button
               type="button"
-              title="Duplicate (Cmd+D)"
+              title="Duplicate (⌘D)"
               onClick={(e) => {
                 e.stopPropagation();
                 duplicateNode(id);
               }}
-              className="p-1 rounded text-slate-400 hover:text-slate-100"
+              className="p-1 rounded text-fg-muted hover:text-fg"
             >
               <Copy className="w-3 h-3" />
             </button>
@@ -128,7 +117,7 @@ export const AwsContainerNode = memo(({ id, data, selected }: NodeProps<CloudNod
                 e.stopPropagation();
                 deleteNode(id);
               }}
-              className="p-1 rounded text-slate-400 hover:text-rose-400"
+              className="p-1 rounded text-fg-muted hover:text-err"
             >
               <Trash2 className="w-3 h-3" />
             </button>
@@ -136,21 +125,15 @@ export const AwsContainerNode = memo(({ id, data, selected }: NodeProps<CloudNod
         </div>
       </div>
 
-      {!isEnabled && (
-        <div className="absolute top-10 left-3 flex items-center gap-1 text-[10px] text-rose-300">
-          <EyeOff className="w-3 h-3" /> Skipped in {activeEnv.toUpperCase()}
-        </div>
-      )}
-
       {childCount === 0 && (
         <div className="absolute inset-0 top-10 flex items-center justify-center pointer-events-none">
-          <span className="text-[11px] text-slate-500">
-            Drag resources here to place them in this {isSubnet ? 'subnet' : 'VPC'}
+          <span className="text-xs text-fg-faint">
+            Drop resources here to place them in this {isSubnet ? 'subnet' : 'VPC'}
           </span>
         </div>
       )}
 
-      <Handle type="source" position={Position.Right} className="!w-3 !h-3" style={{ background: color }} />
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 });

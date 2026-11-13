@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useCloudStore } from '../store/useCloudStore';
-import { X, FileCode2, FolderOpen, Download, Upload, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { X, FolderOpen, Download, Upload, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Button, IconButton, cn, monoFieldCls } from './ui';
 
 type Tab = 'terraform' | 'project';
 type Status = { kind: 'ok' | 'error'; message: string } | null;
@@ -12,6 +13,7 @@ export function ImportExportModal() {
   const exportProjectJson = useCloudStore((s) => s.exportProjectJson);
   const importProjectJson = useCloudStore((s) => s.importProjectJson);
   const nodeCount = useCloudStore((s) => s.nodes.length);
+  const projectFile = useCloudStore((s) => s.projectFile);
 
   const [tab, setTab] = useState<Tab>('terraform');
   const [hcl, setHcl] = useState('');
@@ -65,22 +67,19 @@ export function ImportExportModal() {
   };
 
   return (
-    <div
-      onClick={close}
-      className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
-    >
+    <div onClick={close} className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl rounded-2xl bg-[#11141d] border border-slate-800 shadow-2xl overflow-hidden"
+        className="w-full max-w-2xl rounded-lg bg-panel border border-line shadow-2xl shadow-black/50 overflow-hidden"
       >
-        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-1 bg-[#0d1017] p-1 rounded-xl border border-slate-800">
+        <div className="h-12 pl-3 pr-3 border-b border-line flex items-stretch justify-between">
+          <nav className="flex items-stretch">
             {(
               [
-                { id: 'terraform', label: 'Import Terraform', icon: FileCode2 },
-                { id: 'project', label: 'Save / Load Project', icon: FolderOpen },
+                { id: 'terraform', label: 'Import Terraform' },
+                { id: 'project', label: 'Project file' },
               ] as const
-            ).map(({ id, label, icon: Icon }) => (
+            ).map(({ id, label }) => (
               <button
                 key={id}
                 type="button"
@@ -88,31 +87,28 @@ export function ImportExportModal() {
                   setTab(id);
                   setStatus(null);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 ${
-                  tab === id ? 'bg-[#1f2637] text-white border border-slate-700' : 'text-slate-400 hover:text-slate-200 border border-transparent'
-                }`}
+                className={cn(
+                  'relative px-2.5 text-[13px] transition-colors',
+                  tab === id ? 'text-fg' : 'text-fg-muted hover:text-fg'
+                )}
               >
-                <Icon className="w-3.5 h-3.5" /> {label}
+                {label}
+                {tab === id && <span className="absolute left-2.5 right-2.5 -bottom-px h-px bg-fg" />}
               </button>
             ))}
-          </div>
-          <button
-            type="button"
-            onClick={close}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-          >
+          </nav>
+          <IconButton onClick={close} title="Close" className="self-center">
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="p-5 space-y-4">
           {tab === 'terraform' ? (
             <>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Paste HCL or pick one or more <code className="text-orange-300">.tf</code> files. Each{' '}
-                <code className="text-orange-300">resource "aws_*"</code> block becomes a node, and references
-                between resources become connections. This replaces the current canvas ({nodeCount} nodes); undo
-                with <kbd className="text-slate-200">⌘Z</kbd>.
+              <p className="text-xs text-fg-muted leading-relaxed">
+                Paste HCL or choose <span className="font-mono text-fg">.tf</span> files. Each{' '}
+                <span className="font-mono text-fg">resource "aws_*"</span> block becomes a node and references
+                become connections. This replaces the current canvas ({nodeCount} nodes); undo with ⌘Z.
               </p>
               <textarea
                 value={hcl}
@@ -120,16 +116,12 @@ export function ImportExportModal() {
                 rows={12}
                 spellCheck={false}
                 placeholder={'resource "aws_s3_bucket" "assets" {\n  bucket = "my-assets"\n}'}
-                className="w-full bg-[#080a0f] border border-slate-800 rounded-xl p-3 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-orange-500"
+                className={cn(monoFieldCls, 'p-3 text-[11.5px] leading-relaxed resize-y')}
               />
               <div className="flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => tfFileInput.current?.click()}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5"
-                >
-                  <FolderOpen className="w-3.5 h-3.5" /> Choose .tf files
-                </button>
+                <Button onClick={() => tfFileInput.current?.click()}>
+                  <FolderOpen className="w-3.5 h-3.5" /> Choose files
+                </Button>
                 <input
                   ref={tfFileInput}
                   type="file"
@@ -141,42 +133,43 @@ export function ImportExportModal() {
                     e.target.value = '';
                   }}
                 />
-                <button
-                  type="button"
-                  disabled={!hcl.trim()}
-                  onClick={importHcl}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 disabled:opacity-40 flex items-center gap-1.5"
-                >
-                  <Upload className="w-3.5 h-3.5" /> Import to canvas
-                </button>
+                <Button variant="primary" disabled={!hcl.trim()} onClick={importHcl}>
+                  Import to canvas
+                </Button>
               </div>
             </>
           ) : (
             <>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Your canvas auto-saves in this browser. Download a{' '}
-                <code className="text-orange-300">.localcloud.json</code> file to back it up, share it, or commit it
-                next to your Terraform. It includes every node, connection, environment override and environment
-                profile.
+              <p className="text-xs text-fg-muted leading-relaxed">
+                {projectFile.file && projectFile.state !== 'error' ? (
+                  <>
+                    The canvas saves to <span className="font-mono text-fg">./{projectFile.file}</span> as you edit,
+                    so you can commit it next to your Terraform. After pulling changes to that file, reload this
+                    page to pick them up.
+                  </>
+                ) : (
+                  <>The canvas is saved in this browser only.</>
+                )}{' '}
+                A downloaded copy holds every node, connection, override and environment profile.
               </p>
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
                   onClick={downloadProject}
-                  className="p-4 rounded-xl border border-slate-800 bg-[#141824] hover:border-slate-600 text-left space-y-1"
+                  className="p-4 rounded-md border border-line hover:border-line-strong hover:bg-raised text-left transition-colors"
                 >
-                  <Download className="w-4 h-4 text-emerald-400" />
-                  <div className="text-xs font-semibold text-white">Download project</div>
-                  <div className="text-[10px] text-slate-400">{nodeCount} nodes · all 4 environments</div>
+                  <Download className="w-4 h-4 text-fg-muted" />
+                  <div className="text-[13px] text-fg mt-3">Download project</div>
+                  <div className="text-[11px] text-fg-faint mt-0.5">{nodeCount} nodes · 4 environments</div>
                 </button>
                 <button
                   type="button"
                   onClick={() => jsonFileInput.current?.click()}
-                  className="p-4 rounded-xl border border-slate-800 bg-[#141824] hover:border-slate-600 text-left space-y-1"
+                  className="p-4 rounded-md border border-line hover:border-line-strong hover:bg-raised text-left transition-colors"
                 >
-                  <Upload className="w-4 h-4 text-sky-400" />
-                  <div className="text-xs font-semibold text-white">Load project file</div>
-                  <div className="text-[10px] text-slate-400">Replaces the canvas (undo with ⌘Z)</div>
+                  <Upload className="w-4 h-4 text-fg-muted" />
+                  <div className="text-[13px] text-fg mt-3">Load project file</div>
+                  <div className="text-[11px] text-fg-faint mt-0.5">Replaces the canvas; undo with ⌘Z</div>
                 </button>
                 <input
                   ref={jsonFileInput}
@@ -193,16 +186,10 @@ export function ImportExportModal() {
           )}
 
           {status && (
-            <div
-              className={`px-3 py-2 rounded-lg text-xs flex items-center gap-2 ${
-                status.kind === 'ok'
-                  ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
-                  : 'bg-rose-500/10 text-rose-300 border border-rose-500/30'
-              }`}
-            >
+            <p className={cn('text-xs flex items-center gap-2', status.kind === 'ok' ? 'text-ok' : 'text-err')}>
               {status.kind === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
               {status.message}
-            </div>
+            </p>
           )}
         </div>
       </div>

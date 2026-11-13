@@ -1,0 +1,475 @@
+{
+  "version": "2.0.0",
+  "targetLocalEmulator": true,
+  "environments": {
+    "dev": {
+      "id": "dev",
+      "name": "Development",
+      "shortLabel": "DEV",
+      "color": "#6E94B0",
+      "badgeClass": "bg-sky-500/15 text-sky-400 border-sky-500/30",
+      "region": "us-east-1",
+      "accountId": "111122223333",
+      "emulatorPort": 9297,
+      "emulatorEndpoint": "https://127.0.0.1:9297",
+      "emulatorTelemetry": false,
+      "emulatorAuth": true,
+      "instanceSizingMultiplier": 1,
+      "enableHighAvailability": false,
+      "defaultTags": {
+        "Environment": "dev",
+        "ManagedBy": "LocalCloudStudio",
+        "EmulatorPort": "9297"
+      }
+    },
+    "testing": {
+      "id": "testing",
+      "name": "Testing / QA",
+      "shortLabel": "TEST",
+      "color": "#9B8AC7",
+      "badgeClass": "bg-purple-500/15 text-purple-400 border-purple-500/30",
+      "region": "us-east-1",
+      "accountId": "222233334444",
+      "emulatorPort": 9298,
+      "emulatorEndpoint": "https://127.0.0.1:9298",
+      "emulatorTelemetry": false,
+      "emulatorAuth": true,
+      "instanceSizingMultiplier": 1,
+      "enableHighAvailability": false,
+      "defaultTags": {
+        "Environment": "testing",
+        "ManagedBy": "LocalCloudStudio",
+        "EmulatorPort": "9298"
+      }
+    },
+    "staging": {
+      "id": "staging",
+      "name": "Staging",
+      "shortLabel": "STG",
+      "color": "#5FA59A",
+      "badgeClass": "bg-amber-500/15 text-amber-400 border-amber-500/30",
+      "region": "us-west-2",
+      "accountId": "333344445555",
+      "emulatorPort": 9299,
+      "emulatorEndpoint": "https://127.0.0.1:9299",
+      "emulatorTelemetry": false,
+      "emulatorAuth": true,
+      "instanceSizingMultiplier": 2,
+      "enableHighAvailability": true,
+      "defaultTags": {
+        "Environment": "staging",
+        "ManagedBy": "LocalCloudStudio",
+        "EmulatorPort": "9299"
+      }
+    },
+    "prod": {
+      "id": "prod",
+      "name": "Production",
+      "shortLabel": "PROD",
+      "color": "#D08A5C",
+      "badgeClass": "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+      "region": "us-west-2",
+      "accountId": "999988887777",
+      "emulatorPort": 9300,
+      "emulatorEndpoint": "https://127.0.0.1:9300",
+      "emulatorTelemetry": false,
+      "emulatorAuth": true,
+      "instanceSizingMultiplier": 4,
+      "enableHighAvailability": true,
+      "defaultTags": {
+        "Environment": "prod",
+        "ManagedBy": "LocalCloudStudio",
+        "Criticality": "High",
+        "EmulatorPort": "9300"
+      }
+    }
+  },
+  "nodes": [
+    {
+      "id": "node-vpc-main",
+      "type": "awsContainer",
+      "position": {
+        "x": 80,
+        "y": 70
+      },
+      "width": 1205,
+      "height": 560,
+      "data": {
+        "label": "Primary Cloud VPC",
+        "resourceName": "primary_vpc",
+        "serviceType": "aws_vpc",
+        "baseConfig": {
+          "cidr_block": "10.10.0.0/16",
+          "instance_tenancy": "default",
+          "enable_dns_support": true,
+          "enable_dns_hostnames": true,
+          "assign_generated_ipv6_cidr_block": false
+        },
+        "envOverrides": {
+          "dev": {
+            "cidr_block": "10.10.0.0/16"
+          },
+          "testing": {
+            "cidr_block": "10.20.0.0/16"
+          },
+          "staging": {
+            "cidr_block": "10.30.0.0/16"
+          },
+          "prod": {
+            "cidr_block": "10.100.0.0/16",
+            "assign_generated_ipv6_cidr_block": true
+          }
+        },
+        "envEnabled": {
+          "dev": true,
+          "testing": true,
+          "staging": true,
+          "prod": true
+        },
+        "tags": {
+          "Network": "Core"
+        }
+      }
+    },
+    {
+      "id": "node-subnet-public",
+      "type": "awsContainer",
+      "parentId": "node-vpc-main",
+      "position": {
+        "x": 24,
+        "y": 60
+      },
+      "width": 320,
+      "height": 270,
+      "data": {
+        "label": "Public Ingress Subnet",
+        "resourceName": "public_ingress_subnet",
+        "serviceType": "aws_subnet",
+        "baseConfig": {
+          "cidr_block": "10.10.1.0/24",
+          "availability_zone": "us-east-1a",
+          "map_public_ip_on_launch": true,
+          "tier": "public"
+        },
+        "envOverrides": {
+          "testing": {
+            "cidr_block": "10.20.1.0/24"
+          },
+          "staging": {
+            "cidr_block": "10.30.1.0/24",
+            "availability_zone": "us-west-2a"
+          },
+          "prod": {
+            "cidr_block": "10.100.1.0/24",
+            "availability_zone": "us-west-2a"
+          }
+        },
+        "envEnabled": {
+          "dev": true,
+          "testing": true,
+          "staging": true,
+          "prod": true
+        },
+        "tags": {
+          "Tier": "Public"
+        }
+      }
+    },
+    {
+      "id": "node-subnet-private",
+      "type": "awsContainer",
+      "parentId": "node-vpc-main",
+      "position": {
+        "x": 368,
+        "y": 60
+      },
+      "width": 750,
+      "height": 470,
+      "data": {
+        "label": "Private App Subnet",
+        "resourceName": "private_app_subnet",
+        "serviceType": "aws_subnet",
+        "baseConfig": {
+          "cidr_block": "10.10.10.0/24",
+          "availability_zone": "us-east-1a",
+          "map_public_ip_on_launch": false,
+          "tier": "private"
+        },
+        "envOverrides": {
+          "testing": {
+            "cidr_block": "10.20.10.0/24"
+          },
+          "staging": {
+            "cidr_block": "10.30.10.0/24",
+            "availability_zone": "us-west-2a"
+          },
+          "prod": {
+            "cidr_block": "10.100.10.0/24",
+            "availability_zone": "us-west-2a"
+          }
+        },
+        "envEnabled": {
+          "dev": true,
+          "testing": true,
+          "staging": true,
+          "prod": true
+        },
+        "tags": {
+          "Tier": "Private"
+        }
+      }
+    },
+    {
+      "id": "node-alb-ingress",
+      "type": "awsNode",
+      "parentId": "node-subnet-public",
+      "position": {
+        "x": 24,
+        "y": 60
+      },
+      "data": {
+        "label": "Public Ingress ALB",
+        "resourceName": "public_ingress_alb",
+        "serviceType": "aws_lb",
+        "baseConfig": {
+          "load_balancer_type": "application",
+          "internal": false,
+          "enable_deletion_protection": false,
+          "idle_timeout": 60,
+          "listener_port": 443,
+          "health_check_path": "/healthz"
+        },
+        "envOverrides": {
+          "prod": {
+            "enable_deletion_protection": true,
+            "idle_timeout": 120
+          }
+        },
+        "envEnabled": {
+          "dev": true,
+          "testing": true,
+          "staging": true,
+          "prod": true
+        },
+        "tags": {
+          "Ingress": "ALB"
+        }
+      }
+    },
+    {
+      "id": "node-ecs-api",
+      "type": "awsNode",
+      "parentId": "node-subnet-private",
+      "position": {
+        "x": 24,
+        "y": 60
+      },
+      "data": {
+        "label": "Core Backend Fargate Service",
+        "resourceName": "core_backend_fargate",
+        "serviceType": "aws_ecs_service",
+        "baseConfig": {
+          "container_image": "111122223333.dkr.ecr.us-east-1.amazonaws.com/backend:latest",
+          "container_port": 8080,
+          "cpu": "256",
+          "memory": "512",
+          "desired_count": 1,
+          "assign_public_ip": false,
+          "enable_execute_command": true
+        },
+        "envOverrides": {
+          "testing": {
+            "desired_count": 2,
+            "cpu": "512",
+            "memory": "1024"
+          },
+          "staging": {
+            "desired_count": 3,
+            "cpu": "1024",
+            "memory": "2048"
+          },
+          "prod": {
+            "desired_count": 6,
+            "cpu": "2048",
+            "memory": "4096",
+            "enable_execute_command": false
+          }
+        },
+        "envEnabled": {
+          "dev": true,
+          "testing": true,
+          "staging": true,
+          "prod": true
+        },
+        "tags": {
+          "Runtime": "Fargate"
+        }
+      }
+    },
+    {
+      "id": "node-rds-pg",
+      "type": "awsNode",
+      "parentId": "node-subnet-private",
+      "position": {
+        "x": 466.52631578947364,
+        "y": 199.78947368421052
+      },
+      "data": {
+        "label": "Primary PostgreSQL DB",
+        "resourceName": "primary_postgres_db",
+        "serviceType": "aws_db_instance",
+        "baseConfig": {
+          "engine": "postgres",
+          "engine_version": "16.3",
+          "instance_class": "db.t4g.micro",
+          "allocated_storage": 20,
+          "max_allocated_storage": 100,
+          "db_name": "core_platform",
+          "username": "postgres_admin",
+          "multi_az": false,
+          "storage_encrypted": true,
+          "backup_retention_period": 1,
+          "skip_final_snapshot": true
+        },
+        "envOverrides": {
+          "staging": {
+            "instance_class": "db.t4g.medium",
+            "allocated_storage": 50,
+            "multi_az": true,
+            "backup_retention_period": 7
+          },
+          "prod": {
+            "instance_class": "db.r6g.large",
+            "allocated_storage": 200,
+            "max_allocated_storage": 1000,
+            "multi_az": true,
+            "backup_retention_period": 30,
+            "skip_final_snapshot": false
+          }
+        },
+        "envEnabled": {
+          "dev": true,
+          "testing": true,
+          "staging": true,
+          "prod": true
+        },
+        "tags": {
+          "Engine": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "node-redis-cache",
+      "type": "awsNode",
+      "parentId": "node-subnet-private",
+      "position": {
+        "x": 24,
+        "y": 245
+      },
+      "data": {
+        "label": "Session & Query Cache",
+        "resourceName": "session_redis_cache",
+        "serviceType": "aws_elasticache_cluster",
+        "baseConfig": {
+          "engine": "redis",
+          "node_type": "cache.t4g.micro",
+          "num_cache_nodes": 1,
+          "port": 6379
+        },
+        "envOverrides": {
+          "staging": {
+            "node_type": "cache.t4g.small",
+            "num_cache_nodes": 2
+          },
+          "prod": {
+            "node_type": "cache.r6g.large",
+            "num_cache_nodes": 3
+          }
+        },
+        "envEnabled": {
+          "dev": true,
+          "testing": true,
+          "staging": true,
+          "prod": true
+        },
+        "tags": {
+          "Cache": "Redis"
+        }
+      }
+    },
+    {
+      "id": "node-secrets-db",
+      "type": "awsNode",
+      "position": {
+        "x": 916.708819103004,
+        "y": -123.12528079449419
+      },
+      "data": {
+        "label": "Database Credentials Vault",
+        "resourceName": "db_credentials_secret",
+        "serviceType": "aws_secretsmanager_secret",
+        "baseConfig": {
+          "secret_prefix": "platform/rds/master",
+          "recovery_window_in_days": 0,
+          "secret_json": "{\"username\":\"postgres_admin\",\"password\":\"local_dev_password_9297\"}"
+        },
+        "envOverrides": {
+          "prod": {
+            "recovery_window_in_days": 30
+          }
+        },
+        "envEnabled": {
+          "dev": true,
+          "testing": true,
+          "staging": true,
+          "prod": true
+        },
+        "tags": {
+          "Security": "Vault"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-alb-ecs",
+      "source": "node-alb-ingress",
+      "target": "node-ecs-api",
+      "animated": true,
+      "data": {
+        "relationshipType": "target_route",
+        "label": "Target Group :8080"
+      }
+    },
+    {
+      "id": "e-ecs-rds",
+      "source": "node-ecs-api",
+      "target": "node-rds-pg",
+      "animated": true,
+      "data": {
+        "relationshipType": "data_flow",
+        "label": "SQL Port 5432"
+      }
+    },
+    {
+      "id": "e-ecs-redis",
+      "source": "node-ecs-api",
+      "target": "node-redis-cache",
+      "animated": true,
+      "data": {
+        "relationshipType": "data_flow",
+        "label": "RESP Port 6379"
+      }
+    },
+    {
+      "id": "e-ecs-secrets",
+      "source": "node-ecs-api",
+      "target": "node-secrets-db",
+      "animated": false,
+      "data": {
+        "relationshipType": "iam_grant",
+        "label": "GetSecretValue"
+      }
+    }
+  ]
+}

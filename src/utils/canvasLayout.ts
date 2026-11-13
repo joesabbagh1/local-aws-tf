@@ -1,8 +1,8 @@
 import type { CloudNode } from '../types/cloud';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 
-export const CARD_WIDTH = 264;
-export const CARD_HEIGHT = 170;
+export const CARD_WIDTH = 240;
+export const CARD_HEIGHT = 150;
 
 const CONTAINER_RANK: Record<string, number> = {
   aws_vpc: 0,

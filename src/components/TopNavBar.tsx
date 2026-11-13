@@ -2,18 +2,19 @@ import { useEffect, useState } from 'react';
 import { useCloudStore } from '../store/useCloudStore';
 import type { EnvironmentId } from '../types/cloud';
 import {
-  Cloud,
   LayoutGrid,
-  Sparkles,
   Trash2,
-  Download,
   Check,
   Undo2,
   Redo2,
-  Upload,
   Play,
   Loader2,
+  RefreshCw,
+  LayoutTemplate,
+  FileInput,
 } from 'lucide-react';
+import { Button, IconButton, EnvDot, cn } from './ui';
+import { planHasChanges } from '../utils/planSummary';
 
 const ENV_ORDER: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 
@@ -32,8 +33,14 @@ export function TopNavBar() {
   const emulatorStatuses = useCloudStore((s) => s.emulatorStatuses);
   const refreshEmulatorStatuses = useCloudStore((s) => s.refreshEmulatorStatuses);
   const syncTerraformToDisk = useCloudStore((s) => s.syncTerraformToDisk);
-  const runTerraformCommand = useCloudStore((s) => s.runTerraformCommand);
+  const requestApply = useCloudStore((s) => s.requestApply);
+  const loadProjectFromDisk = useCloudStore((s) => s.loadProjectFromDisk);
   const isRunningCommand = useCloudStore((s) => s.isRunningCommand);
+  const runningCommand = useCloudStore((s) => s.runningCommand);
+  const projectFile = useCloudStore((s) => s.projectFile);
+  const hasPlanToApply = useCloudStore(
+    (s) => s.pendingPlan?.envId === s.activeEnv && planHasChanges(s.pendingPlan)
+  );
   const undo = useCloudStore((s) => s.undo);
   const redo = useCloudStore((s) => s.redo);
   const pastCount = useCloudStore((s) => s.past.length);
@@ -43,15 +50,14 @@ export function TopNavBar() {
 
   useEffect(() => {
     refreshEmulatorStatuses();
-    // Auto-sync initial Terraform files to ./terraform-out on startup
-    syncTerraformToDisk();
+    // The project file on disk wins over browser storage; then write its Terraform to ./terraform-out
+    loadProjectFromDisk().finally(() => syncTerraformToDisk());
     const timer = setInterval(refreshEmulatorStatuses, 6000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const currentEnvProfile = environments[activeEnv];
-  const currentPortStatus = emulatorStatuses[currentEnvProfile.emulatorPort];
 
   const handleExportAllEnvsToDisk = async () => {
     setExportStatus('saving');
@@ -66,39 +72,26 @@ export function TopNavBar() {
 
   const handleQuickApply = async () => {
     setRightTab('emulator');
-    await runTerraformCommand('apply', activeEnv);
+    await requestApply(activeEnv);
   };
 
   return (
-    <header className="h-14 shrink-0 bg-[#0d1017] border-b border-slate-800/80 px-3.5 flex items-center justify-between gap-3 select-none z-30">
-      {/* Brand Title */}
-      <div className="flex items-center gap-2.5 shrink-0">
-        <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center shadow-lg shadow-orange-500/20">
-          <Cloud className="w-4 h-4 text-slate-950 stroke-[2.3]" />
+    <header className="h-12 shrink-0 bg-panel border-b border-line pl-4 pr-3 flex items-center gap-4 select-none z-30">
+      {/* Brand */}
+      <div className="flex items-center gap-2.5 shrink-0 w-[224px]">
+        <div className="w-5 h-5 rounded-[5px] bg-accent flex items-center justify-center">
+          <span className="w-2 h-2 rounded-[2px] bg-accent-ink" />
         </div>
-        <div>
-          <div className="flex items-center gap-1.5">
-            <h1 className="text-xs font-bold tracking-tight text-white">
-              LocalCloud Studio
-            </h1>
-            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/30 font-semibold">
-              aws-emulator 2D
-            </span>
-          </div>
-          <p className="text-[10px] text-slate-400 hidden xl:block">
-            Visual AWS Canvas • Multi-Env Terraform & Live Emulator OS
-          </p>
-        </div>
+        <span className="text-[13px] font-semibold tracking-tight text-fg">LocalCloud</span>
+        <span className="text-[13px] text-fg-faint">Studio</span>
       </div>
 
-      {/* Multi-Environment Switcher (DEV / TESTING / STAGING / PROD) */}
-      <div className="flex items-center gap-1 bg-[#141824] p-1 rounded-xl border border-slate-800">
+      {/* Environment switcher */}
+      <nav className="flex items-center h-full" aria-label="Environment">
         {ENV_ORDER.map((envId) => {
           const env = environments[envId];
           const isActive = activeEnv === envId;
-          const activeNodeCount = nodes.filter(
-            (n) => n.data.envEnabled?.[envId] !== false
-          ).length;
+          const activeNodeCount = nodes.filter((n) => n.data.envEnabled?.[envId] !== false).length;
           const portOnline = emulatorStatuses[env.emulatorPort]?.running;
 
           return (
@@ -106,167 +99,117 @@ export function TopNavBar() {
               key={envId}
               type="button"
               onClick={() => setActiveEnv(envId)}
-              className={`relative px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
-                isActive
-                  ? 'bg-[#1f2637] text-white shadow-sm border border-slate-700/80'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
+              title={`${env.name} · ${activeNodeCount} resources · emulator :${env.emulatorPort} ${
+                portOnline ? 'running' : 'stopped'
               }`}
-            >
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{
-                  backgroundColor: env.color,
-                  boxShadow: isActive ? `0 0 8px ${env.color}` : undefined,
-                }}
-              />
-              <span className="font-semibold text-[11px]">{env.shortLabel}</span>
-              <span className="text-[10px] font-mono text-slate-400 hidden md:inline">
-                :{env.emulatorPort}
-              </span>
-              <span
-                className={`text-[9px] font-mono px-1 py-0.2 rounded ${
-                  isActive
-                    ? 'bg-slate-900/90 text-slate-200'
-                    : 'bg-slate-800/60 text-slate-400'
-                }`}
-              >
-                {activeNodeCount}
-              </span>
-              {portOnline && (
-                <span
-                  title={`Emulator online on port ${env.emulatorPort}`}
-                  className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping absolute top-1 right-1"
-                />
+              className={cn(
+                'relative h-full px-3 flex items-center gap-2 text-[13px] transition-colors',
+                isActive ? 'text-fg' : 'text-fg-muted hover:text-fg'
               )}
+            >
+              <EnvDot color={env.color} hollow={!portOnline} />
+              <span>{envId === 'testing' ? 'test' : envId}</span>
+              {isActive && <span className="absolute left-3 right-3 -bottom-px h-px bg-fg" />}
             </button>
           );
         })}
+      </nav>
+
+      <div className="flex-1" />
+
+      {/* Where the canvas is saved */}
+      {projectFile.file && (
+        <span
+          className="hidden xl:flex items-center gap-1.5 text-[11px] font-mono text-fg-faint"
+          title={
+            projectFile.state === 'error'
+              ? `Could not save ./${projectFile.file}: ${projectFile.error}`
+              : `The canvas is saved to ./${projectFile.file} as you edit`
+          }
+        >
+          <span
+            className={cn(
+              'w-1.5 h-1.5 rounded-full',
+              projectFile.state === 'error' ? 'bg-err' : projectFile.state === 'saving' ? 'bg-warn' : 'bg-ok'
+            )}
+          />
+          {projectFile.file}
+        </span>
+      )}
+
+      {/* Canvas tools */}
+      <div className="flex items-center gap-0.5">
+        <IconButton disabled={pastCount === 0} onClick={undo} title="Undo (⌘Z)">
+          <Undo2 className="w-4 h-4" />
+        </IconButton>
+        <IconButton disabled={futureCount === 0} onClick={redo} title="Redo (⌘⇧Z)">
+          <Redo2 className="w-4 h-4" />
+        </IconButton>
+        <IconButton onClick={autoLayoutCanvas} title="Auto-arrange canvas">
+          <LayoutGrid className="w-4 h-4" />
+        </IconButton>
+        <IconButton variant="danger" onClick={clearCanvas} title="Clear canvas">
+          <Trash2 className="w-4 h-4" />
+        </IconButton>
       </div>
 
-      {/* Right Action Bar */}
-      <div className="flex items-center gap-1.5">
-        {/* Undo / Redo */}
-        <div className="flex items-center bg-[#141824] rounded-lg border border-slate-800 p-0.5">
-          <button
-            type="button"
-            disabled={pastCount === 0}
-            onClick={undo}
-            title="Undo (Cmd+Z)"
-            className="p-1.5 rounded text-slate-300 hover:text-white disabled:opacity-30 transition-opacity"
-          >
-            <Undo2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            disabled={futureCount === 0}
-            onClick={redo}
-            title="Redo (Cmd+Shift+Z)"
-            className="p-1.5 rounded text-slate-300 hover:text-white disabled:opacity-30 transition-opacity"
-          >
-            <Redo2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+      <span className="w-px h-5 bg-line" />
 
-        {/* Emulator Target Toggle */}
+      <div className="flex items-center gap-1">
+        <Button variant="ghost" onClick={() => setTemplateModalOpen(true)}>
+          <LayoutTemplate className="w-3.5 h-3.5" />
+          <span className="hidden lg:inline">Blueprints</span>
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={() => setImportModalOpen(true)}
+          title="Import Terraform, or save / load a project file"
+        >
+          <FileInput className="w-3.5 h-3.5" />
+          <span className="hidden lg:inline">Import</span>
+        </Button>
+      </div>
+
+      <span className="w-px h-5 bg-line" />
+
+      <div className="flex items-center gap-2">
+        {/* Provider target: local emulator or real AWS */}
         <button
           type="button"
           onClick={() => setTargetLocalEmulator(!targetLocalEmulator)}
-          title="Switch Terraform provider between Local AWS Emulator (127.0.0.1:9297+) and Production AWS"
-          className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border flex items-center gap-1.5 transition-all ${
-            targetLocalEmulator
-              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/15'
-              : 'bg-slate-800/70 text-slate-300 border-slate-700 hover:bg-slate-800'
-          }`}
+          title="Switch the Terraform provider between the local emulator and real AWS"
+          className="h-7 px-2.5 rounded-md text-xs font-mono text-fg-muted hover:text-fg hover:bg-raised flex items-center gap-1.5 transition-colors"
         >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              currentPortStatus?.running
-                ? 'bg-emerald-400'
-                : targetLocalEmulator
-                ? 'bg-amber-400'
-                : 'bg-sky-400'
-            }`}
-          />
-          <span className="font-mono">
-            {targetLocalEmulator
-              ? `:${currentEnvProfile.emulatorPort}`
-              : currentEnvProfile.region}
-          </span>
+          <span className="font-sans text-fg-faint">target</span>
+          {targetLocalEmulator ? `127.0.0.1:${currentEnvProfile.emulatorPort}` : `aws ${currentEnvProfile.region}`}
         </button>
 
-        {/* Blueprints & Import HCL/JSON */}
-        <button
-          type="button"
-          onClick={() => setTemplateModalOpen(true)}
-          className="px-2 py-1.5 rounded-lg text-[11px] font-medium bg-[#141824] hover:bg-[#1c2233] text-slate-200 border border-slate-700/80 flex items-center gap-1 transition-colors"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-          <span className="hidden lg:inline">Blueprints</span>
-        </button>
+        <Button onClick={handleExportAllEnvsToDisk} title="Write Terraform for every environment to ./terraform-out">
+          {exportStatus === 'saved' ? (
+            <Check className="w-3.5 h-3.5 text-ok" />
+          ) : (
+            <RefreshCw className={cn('w-3.5 h-3.5', exportStatus === 'saving' && 'animate-spin')} />
+          )}
+          {exportStatus === 'saved' ? 'Synced' : 'Sync'}
+        </Button>
 
-        <button
-          type="button"
-          onClick={() => setImportModalOpen(true)}
-          title="Import existing Terraform .tf HCL or Save/Load Project JSON"
-          className="px-2 py-1.5 rounded-lg text-[11px] font-medium bg-[#141824] hover:bg-[#1c2233] text-slate-200 border border-slate-700/80 flex items-center gap-1 transition-colors"
-        >
-          <Upload className="w-3.5 h-3.5 text-sky-400" />
-          <span className="hidden lg:inline">Import / Save</span>
-        </button>
-
-        {/* Auto-Arrange & Clear */}
-        <button
-          type="button"
-          onClick={autoLayoutCanvas}
-          title="Auto-arrange canvas topology"
-          className="p-1.5 rounded-lg bg-[#141824] hover:bg-[#1c2233] text-slate-300 border border-slate-700/80 transition-colors"
-        >
-          <LayoutGrid className="w-3.5 h-3.5" />
-        </button>
-
-        <button
-          type="button"
-          onClick={clearCanvas}
-          title="Clear canvas"
-          className="p-1.5 rounded-lg bg-[#141824] hover:bg-rose-950/50 text-slate-400 hover:text-rose-300 border border-slate-700/80 transition-colors"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
-
-        {/* One-Click Apply to Emulator */}
-        <button
-          type="button"
+        <Button
+          variant="primary"
           disabled={isRunningCommand}
           onClick={handleQuickApply}
-          title={`Run terraform apply for [${activeEnv.toUpperCase()}] against local AWS Emulator`}
-          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 transition-all disabled:opacity-50"
+          title={
+            hasPlanToApply
+              ? `Apply the reviewed plan to ${activeEnv}`
+              : `Plan ${activeEnv} and review the changes before anything is applied`
+          }
         >
           {isRunningCommand ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
           ) : (
-            <Play className="w-3.5 h-3.5 fill-current" />
+            <Play className="w-3 h-3 fill-current" />
           )}
-          <span>Apply {activeEnv.toUpperCase()}</span>
-        </button>
-
-        {/* Sync Terraform to Disk */}
-        <button
-          type="button"
-          onClick={handleExportAllEnvsToDisk}
-          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-slate-950 shadow-md shadow-orange-500/15 flex items-center gap-1 transition-all"
-        >
-          {exportStatus === 'saved' ? (
-            <>
-              <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-              <span>Synced</span>
-            </>
-          ) : (
-            <>
-              <Download className="w-3.5 h-3.5 stroke-[2.2]" />
-              <span>Sync TF</span>
-            </>
-          )}
-        </button>
+          {runningCommand === 'plan' ? 'Planning' : runningCommand === 'apply' ? 'Applying' : 'Apply'} {activeEnv}
+        </Button>
       </div>
     </header>
   );

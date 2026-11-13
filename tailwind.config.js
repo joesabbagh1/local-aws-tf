@@ -7,18 +7,38 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
-        mono: ['JetBrains Mono', 'Fira Code', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        sans: ['"IBM Plex Sans"', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
       },
+      // Signal & Graphite (katagami.ai/palettes/signal-graphite): graphite ground,
+      // hairline keylines, one signal-yellow accent, quiet semantics.
       colors: {
-        canvas: {
-          bg: '#090b10',
-          panel: '#11141d',
-          border: '#1e2433',
-          hover: '#191e2b',
-          accent: '#f97316',
-        }
-      }
+        base: '#101214',
+        panel: '#16181A',
+        raised: '#1E2124',
+        overlay: '#272B2E',
+        line: {
+          DEFAULT: '#30353A',
+          strong: '#454B50',
+        },
+        fg: {
+          DEFAULT: '#EDEBE6',
+          muted: '#9CA1A4',
+          faint: '#6E7478',
+        },
+        accent: {
+          DEFAULT: '#E8C400',
+          hover: '#F2DA4E',
+          ink: '#16181A',
+        },
+        ok: '#6FA56B',
+        warn: '#D9A441',
+        err: '#D5604A',
+        info: '#6E94B0',
+      },
+      fontSize: {
+        '2xs': ['10.5px', '14px'],
+      },
     },
   },
   plugins: [],
