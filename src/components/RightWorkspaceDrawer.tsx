@@ -8,6 +8,10 @@ import {
 } from '../utils/terraformCompiler';
 import type { EnvironmentId, SchemaField } from '../types/cloud';
 import { AwsServiceIcon } from './AwsServiceIcon';
+import { RunnerConsole } from './RunnerConsole';
+import { ResourceExplorerPanel } from './ResourceExplorerPanel';
+import { ArchitectureAuditPanel } from './ArchitectureAuditPanel';
+import type { RightDrawerTab } from '../store/useCloudStore';
 import {
   Sliders,
   Code2,
@@ -24,9 +28,22 @@ import {
   RefreshCw,
   ShieldCheck,
   ExternalLink,
+  Database,
+  ShieldAlert,
+  FileCode,
+  Radio,
 } from 'lucide-react';
 
 const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
+
+const DRAWER_TABS: { id: RightDrawerTab; label: string; icon: typeof Sliders; tone: string }[] = [
+  { id: 'inspector', label: 'Inspect', icon: Sliders, tone: 'text-orange-400' },
+  { id: 'env-matrix', label: 'Envs', icon: Layers, tone: 'text-purple-400' },
+  { id: 'terraform', label: 'HCL', icon: Code2, tone: 'text-sky-400' },
+  { id: 'emulator', label: 'Runner', icon: Terminal, tone: 'text-emerald-400' },
+  { id: 'explorer', label: 'Data', icon: Database, tone: 'text-teal-300' },
+  { id: 'audit', label: 'Audit', icon: ShieldAlert, tone: 'text-rose-300' },
+];
 
 export function RightWorkspaceDrawer() {
   const rightTab = useCloudStore((s) => s.rightTab);
@@ -35,58 +52,22 @@ export function RightWorkspaceDrawer() {
   return (
     <aside className="w-[460px] shrink-0 h-full bg-[#0d1017] border-l border-slate-800/80 flex flex-col select-none">
       {/* Top Sub-Tab Bar */}
-      <div className="px-3 pt-2.5 pb-2 border-b border-slate-800/80 flex items-center justify-between gap-1 bg-[#11141d]/70">
-        <button
-          type="button"
-          onClick={() => setRightTab('inspector')}
-          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-            rightTab === 'inspector'
-              ? 'bg-[#1c2233] text-white border border-slate-700/80 shadow-sm'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Sliders className="w-3.5 h-3.5 text-orange-400" />
-          <span>Inspector</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setRightTab('env-matrix')}
-          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-            rightTab === 'env-matrix'
-              ? 'bg-[#1c2233] text-white border border-slate-700/80 shadow-sm'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Layers className="w-3.5 h-3.5 text-purple-400" />
-          <span>Multi-Env</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setRightTab('terraform')}
-          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-            rightTab === 'terraform'
-              ? 'bg-[#1c2233] text-white border border-slate-700/80 shadow-sm'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Code2 className="w-3.5 h-3.5 text-sky-400" />
-          <span>Terraform</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setRightTab('emulator')}
-          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-            rightTab === 'emulator'
-              ? 'bg-[#1c2233] text-white border border-slate-700/80 shadow-sm'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-          <span>Emulator</span>
-        </button>
+      <div className="px-2 pt-2.5 pb-2 border-b border-slate-800/80 grid grid-cols-6 gap-0.5 bg-[#11141d]/70">
+        {DRAWER_TABS.map(({ id, label, icon: Icon, tone }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setRightTab(id)}
+            className={`py-1.5 rounded-lg text-[10.5px] font-medium flex flex-col items-center justify-center gap-0.5 transition-all ${
+              rightTab === id
+                ? 'bg-[#1c2233] text-white border border-slate-700/80 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+            }`}
+          >
+            <Icon className={`w-3.5 h-3.5 ${tone}`} />
+            <span>{label}</span>
+          </button>
+        ))}
       </div>
 
       {/* Tab Content */}
@@ -95,6 +76,8 @@ export function RightWorkspaceDrawer() {
         {rightTab === 'env-matrix' && <MultiEnvMatrixPanel />}
         {rightTab === 'terraform' && <LiveTerraformPanel />}
         {rightTab === 'emulator' && <AwsEmulatorCommandCenter />}
+        {rightTab === 'explorer' && <ResourceExplorerPanel />}
+        {rightTab === 'audit' && <ArchitectureAuditPanel />}
       </div>
     </aside>
   );
@@ -552,6 +535,59 @@ function NodeAndEdgeInspector() {
         </div>
       </div>
 
+      {/* Lambda handler source, zipped into artifacts/<name>.zip on every sync */}
+      {selectedNode.data.serviceType === 'aws_lambda_function' && (
+        <div className="p-3 rounded-xl bg-[#141824] border border-slate-800/90 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+              <FileCode className="w-3.5 h-3.5 text-orange-400" />
+              Handler code
+            </span>
+            <span className="text-[10px] font-mono text-slate-400">
+              {String(resolvedConfig.handler || 'index.handler').split('.').slice(0, -1).join('.') || 'index'}.
+              {String(resolvedConfig.runtime || 'nodejs20.x').startsWith('python') ? 'py' : 'mjs'}
+            </span>
+          </div>
+          <textarea
+            value={selectedNode.data.inlineCode || ''}
+            onChange={(e) => updateNodeMetadata(selectedNode.id, { inlineCode: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key !== 'Tab') return;
+              e.preventDefault();
+              const el = e.currentTarget;
+              const { selectionStart, selectionEnd, value } = el;
+              const next = `${value.slice(0, selectionStart)}  ${value.slice(selectionEnd)}`;
+              updateNodeMetadata(selectedNode.id, { inlineCode: next });
+              requestAnimationFrame(() => el.setSelectionRange(selectionStart + 2, selectionStart + 2));
+            }}
+            rows={12}
+            spellCheck={false}
+            placeholder="Leave empty to deploy a default echo handler"
+            className="w-full bg-[#080a0f] border border-slate-700/80 rounded-lg p-2.5 text-[11px] leading-relaxed text-emerald-200 font-mono focus:outline-none focus:border-orange-500"
+          />
+          <p className="text-[10px] text-slate-400">
+            Shared by every environment. Packaged on Sync TF / Apply into{' '}
+            <code className="text-slate-300">environments/&lt;env&gt;/artifacts/</code>.
+          </p>
+        </div>
+      )}
+
+      {/* Live outputs captured after terraform apply */}
+      {selectedNode.data.provisionedOutputs?.[activeEnv] && (
+        <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/25 space-y-1.5">
+          <span className="text-xs font-semibold text-emerald-300 flex items-center gap-1.5">
+            <Radio className="w-3.5 h-3.5" />
+            Live in {activeEnv.toUpperCase()}
+          </span>
+          {Object.entries(selectedNode.data.provisionedOutputs[activeEnv]!).map(([k, v]) => (
+            <div key={k} className="flex items-start justify-between gap-3 text-[10.5px]">
+              <span className="text-slate-400 shrink-0">{k}</span>
+              <code className="text-slate-100 font-mono break-all text-right select-text">{v}</code>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Resource Tags Editor */}
       <div className="p-3 rounded-xl bg-[#141824] border border-slate-800/90 space-y-2.5">
         <span className="text-xs font-semibold text-slate-200 block">
@@ -996,6 +1032,8 @@ function AwsEmulatorCommandCenter() {
 
   return (
     <div className="p-4 space-y-4">
+      <RunnerConsole />
+
       {/* Official AWS Emulator Banner */}
       <div className="p-3.5 rounded-xl bg-gradient-to-br from-[#141a29] to-[#11141d] border border-slate-800 space-y-2.5">
         <div className="flex items-center justify-between">

@@ -3,6 +3,7 @@ import { ServiceCatalogSidebar } from './components/ServiceCatalogSidebar';
 import { CloudCanvas } from './components/CloudCanvas';
 import { RightWorkspaceDrawer } from './components/RightWorkspaceDrawer';
 import { BlueprintModal } from './components/BlueprintModal';
+import { ImportExportModal } from './components/ImportExportModal';
 
 export function App() {
   return (
@@ -14,6 +15,7 @@ export function App() {
         <RightWorkspaceDrawer />
       </div>
       <BlueprintModal />
+      <ImportExportModal />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -10,13 +10,26 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useCloudStore } from '../store/useCloudStore';
 import { AwsNodeCard } from './AwsNodeCard';
+import { AwsContainerNode } from './AwsContainerNode';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import type { CloudNode, CloudEdge } from '../types/cloud';
 import { Sparkles, PlusCircle, Terminal } from 'lucide-react';
 
 const nodeTypes = {
   awsNode: AwsNodeCard,
+  awsContainer: AwsContainerNode,
 };
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  return (
+    el.isContentEditable ||
+    el.tagName === 'INPUT' ||
+    el.tagName === 'TEXTAREA' ||
+    el.tagName === 'SELECT'
+  );
+}
 
 export function CloudCanvas() {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
@@ -33,6 +46,37 @@ export function CloudCanvas() {
   const selectEdge = useCloudStore((s) => s.selectEdge);
   const addServiceNode = useCloudStore((s) => s.addServiceNode);
   const setTemplateModalOpen = useCloudStore((s) => s.setTemplateModalOpen);
+  const onNodeDragStart = useCloudStore((s) => s.onNodeDragStart);
+  const onNodeDragStop = useCloudStore((s) => s.onNodeDragStop);
+
+  // Canvas keyboard shortcuts (ignored while typing in inspector fields)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+      const store = useCloudStore.getState();
+      const mod = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+
+      if (mod && key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) store.redo();
+        else store.undo();
+      } else if (mod && key === 'y') {
+        e.preventDefault();
+        store.redo();
+      } else if (mod && key === 'd') {
+        e.preventDefault();
+        if (store.selectedNodeId) store.duplicateNode(store.selectedNodeId);
+      } else if (!mod && (e.key === 'Backspace' || e.key === 'Delete')) {
+        e.preventDefault();
+        store.deleteSelectedElements();
+      } else if (e.key === 'Escape') {
+        store.selectNode(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const activeEnvProfile = environments[activeEnv];
 
@@ -50,7 +94,7 @@ export function CloudCanvas() {
       if (rfInstance.current) {
         const position = rfInstance.current.screenToFlowPosition({
           x: event.clientX - 130,
-          y: event.clientY - 40,
+          y: event.clientY - 30,
         });
         addServiceNode(serviceType, position);
       } else {
@@ -183,6 +227,9 @@ export function CloudCanvas() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onNodeDragStart={onNodeDragStart}
+        onNodeDragStop={(_e, _node, dragged) => onNodeDragStop(dragged.map((n) => n.id))}
+        deleteKeyCode={null}
         onInit={(instance) => {
           rfInstance.current = instance;
         }}

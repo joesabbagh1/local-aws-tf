@@ -135,6 +135,7 @@ resource "aws_lambda_function" "orders_api_handler" {
   runtime                        = "nodejs20.x"
   handler                        = "dist/orders.handler"
   filename                       = "artifacts/orders_api_handler.zip"
+  source_code_hash               = filebase64sha256("artifacts/orders_api_handler.zip")
   memory_size                    = 1024
   timeout                        = 15
   architectures                  = ["arm64"]
@@ -179,6 +180,7 @@ resource "aws_lambda_function" "fulfillment_worker" {
   runtime                        = "python3.12"
   handler                        = "worker.process_queue"
   filename                       = "artifacts/fulfillment_worker.zip"
+  source_code_hash               = filebase64sha256("artifacts/fulfillment_worker.zip")
   memory_size                    = 512
   timeout                        = 60
   architectures                  = ["arm64"]
@@ -231,6 +233,11 @@ resource "aws_dynamodb_table" "orders_table" {
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-orders_table"
   })
+
+  # Not modeled on the canvas; AWS Emulator reports -1 here, which would otherwise diff on every plan
+  lifecycle {
+    ignore_changes = [on_demand_throughput]
+  }
 }
 
 resource "aws_sqs_queue" "order_fulfillment_queue_dlq" {
@@ -298,6 +305,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "invoices_media_bucket_lifecycl
   rule {
     id     = "auto-expire-objects"
     status = "Enabled"
+    filter {}
     expiration {
       days = 90
     }
@@ -355,11 +363,26 @@ resource "aws_iam_role_policy" "orders_api_handler_sqs_order_fulfillment_queue" 
   })
 }
 
+resource "aws_iam_role_policy" "fulfillment_worker_consume_order_fulfillment_queue" {
+  name = "fulfillment_worker-consume-order_fulfillment_queue"
+  role = aws_iam_role.fulfillment_worker_exec_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]
+      Resource = aws_sqs_queue.order_fulfillment_queue.arn
+    }]
+  })
+}
+
 resource "aws_lambda_event_source_mapping" "order_fulfillment_queue_trigger_fulfillment_worker" {
   event_source_arn = aws_sqs_queue.order_fulfillment_queue.arn
   function_name    = aws_lambda_function.fulfillment_worker.arn
   batch_size       = 10
   enabled          = true
+  depends_on       = [aws_iam_role_policy.fulfillment_worker_consume_order_fulfillment_queue]
 }
 
 resource "aws_iam_role_policy" "fulfillment_worker_s3_invoices_media_bucket" {

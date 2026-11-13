@@ -175,9 +175,34 @@ export function parseTerraformHclToCanvas(hclText: string): {
     }
   }
 
+  // Turn VPC / Subnet references into canvas nesting instead of network edges
+  const nodeById = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const networkEdgesInto = (targetId: string, sourceType: string) =>
+    edges.filter(
+      (e) =>
+        e.target === targetId &&
+        e.data?.relationshipType === 'network_attachment' &&
+        nodeById[e.source]?.data.serviceType === sourceType
+    );
+  const nestedEdgeIds = new Set<string>();
+
+  for (const node of nodes) {
+    const type = node.data.serviceType;
+    if (type === 'aws_vpc') continue;
+    const subnetEdges = type === 'aws_subnet' ? [] : networkEdgesInto(node.id, 'aws_subnet');
+    const vpcEdges = networkEdgesInto(node.id, 'aws_vpc');
+    // Resources spanning several subnets stay wired so every subnet still compiles in
+    const parentEdge = subnetEdges.length === 1 ? subnetEdges[0] : subnetEdges.length === 0 ? vpcEdges[0] : undefined;
+    if (!parentEdge) continue;
+    node.parentId = parentEdge.source;
+    nestedEdgeIds.add(parentEdge.id);
+    // The VPC is implied by the subnet's own nesting
+    if (subnetEdges.length === 1) vpcEdges.forEach((e) => nestedEdgeIds.add(e.id));
+  }
+
   return {
     nodes,
-    edges,
+    edges: edges.filter((e) => !nestedEdgeIds.has(e.id)),
     importedCount: nodes.length,
   };
 }

@@ -85,15 +85,14 @@ export interface CloudNodeData extends Record<string, unknown> {
   notes?: string;
   // Inline code for Lambda functions or EC2 user_data
   inlineCode?: string;
-  // Spatial VPC / Subnet container membership (computed or explicit)
+  // Legacy explicit VPC membership; nesting now uses React Flow parentId
   parentVpcId?: string;
-  parentSubnetId?: string;
   // Live provisioning status per environment
   provisioningStatus?: Partial<Record<EnvironmentId, ProvisioningState>>;
   provisionedOutputs?: Partial<Record<EnvironmentId, Record<string, string>>>;
 }
 
-export type CloudNode = Node<CloudNodeData, 'awsNode'>;
+export type CloudNode = Node<CloudNodeData, 'awsNode' | 'awsContainer'>;
 
 export interface CloudEdgeData extends Record<string, unknown> {
   relationshipType:

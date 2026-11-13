@@ -5,6 +5,7 @@ import type {
   EnvironmentProfile,
 } from '../types/cloud';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
+import { findAncestorOfType } from './canvasLayout';
 
 export function resolveNodeConfigForEnv(
   node: CloudNode,
@@ -27,7 +28,7 @@ export function isFieldOverriddenInEnv(
   return Boolean(overrides && Object.prototype.hasOwnProperty.call(overrides, fieldKey));
 }
 
-function sanitizeIdentifier(name: string): string {
+export function sanitizeIdentifier(name: string): string {
   return (
     name
       .toLowerCase()
@@ -114,44 +115,25 @@ locals {
     const incoming = incomingByTarget[node.id] || [];
     const outgoing = outgoingBySource[node.id] || [];
 
-    // Check explicit wire OR spatial containment inside a VPC node
-    const spatiallyContainingVpc = activeNodes.find(
-      (v) =>
-        v.data.serviceType === 'aws_vpc' &&
-        v.id !== node.id &&
-        node.position.x >= v.position.x - 20 &&
-        node.position.y >= v.position.y - 20 &&
-        node.position.x <= v.position.x + 560 &&
-        node.position.y <= v.position.y + 380
-    );
-
-    const spatiallyContainingSubnet = activeNodes.find(
-      (s) =>
-        s.data.serviceType === 'aws_subnet' &&
-        s.id !== node.id &&
-        node.position.x >= s.position.x - 20 &&
-        node.position.y >= s.position.y - 20 &&
-        node.position.x <= s.position.x + 340 &&
-        node.position.y <= s.position.y + 240
-    );
+    // Membership comes from explicit wires first, then from canvas nesting (VPC / Subnet containers)
+    const containingVpc =
+      findAncestorOfType(node, 'aws_vpc', nodeById) ||
+      (node.data.parentVpcId ? nodeById[node.data.parentVpcId] : undefined);
+    const containingSubnet = findAncestorOfType(node, 'aws_subnet', nodeById);
 
     const connectedVpc =
       incoming
         .map((e) => nodeById[e.source])
         .find((n) => n?.data.serviceType === 'aws_vpc') ||
-      (node.data.parentVpcId ? nodeById[node.data.parentVpcId] : undefined) ||
-      spatiallyContainingVpc ||
+      containingVpc ||
       firstVpcNode;
 
     const connectedSubnets = incoming
       .map((e) => nodeById[e.source])
       .filter((n): n is CloudNode => n?.data.serviceType === 'aws_subnet');
 
-    if (
-      spatiallyContainingSubnet &&
-      !connectedSubnets.some((s) => s.id === spatiallyContainingSubnet.id)
-    ) {
-      connectedSubnets.unshift(spatiallyContainingSubnet);
+    if (containingSubnet && !connectedSubnets.some((s) => s.id === containingSubnet.id)) {
+      connectedSubnets.unshift(containingSubnet);
     }
 
     const effectiveSubnets = connectedSubnets.length > 0 ? connectedSubnets : subnetNodes;
@@ -777,6 +759,7 @@ resource "aws_lambda_function" "${resName}" {
   runtime                        = "${cfg.runtime || 'nodejs20.x'}"
   handler                        = "${cfg.handler || 'index.handler'}"
   filename                       = "artifacts/${resName}.zip"
+  source_code_hash               = filebase64sha256("artifacts/${resName}.zip")
   memory_size                    = ${Number(cfg.memory_size ?? 256)}
   timeout                        = ${Number(cfg.timeout ?? 30)}
   architectures                  = ["${cfg.architectures || 'arm64'}"]
@@ -957,6 +940,7 @@ resource "aws_eks_cluster" "${resName}" {
   rule {
     id     = "auto-expire-objects"
     status = "Enabled"
+    filter {}
     expiration {
       days = ${Number(cfg.lifecycle_expiration_days)}
     }
@@ -1022,7 +1006,12 @@ ${
 
   tags = merge(local.common_tags, {
     Name = "\${local.name_prefix}-${resName}"
-  })${dependsOnLine}
+  })
+
+  # Not modeled on the canvas; AWS Emulator reports -1 here, which would otherwise diff on every plan
+  lifecycle {
+    ignore_changes = [on_demand_throughput]
+  }${dependsOnLine}
 }`;
     }
 
@@ -1292,8 +1281,24 @@ ${
 }`;
 
     case 'aws_bedrock_agent':
-      return `resource "aws_bedrockagent_agent" "${resName}" {
+      return `resource "aws_iam_role" "${resName}_agent_role" {
+  name = "\${local.name_prefix}-${resName}-agent-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "bedrock.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_bedrockagent_agent" "${resName}" {
   agent_name                  = "\${local.name_prefix}-${resName}"
+  agent_resource_role_arn     = aws_iam_role.${resName}_agent_role.arn
   foundation_model            = "${cfg.foundation_model || 'anthropic.claude-3-5-sonnet-20241022-v2:0'}"
   instruction                 = ${JSON.stringify(
     cfg.instruction || 'You are an AWS cloud infrastructure AI assistant.'
@@ -1351,21 +1356,51 @@ resource "aws_lambda_permission" "${srcName}_invoke_${dstName}" {
 
     // 2. SQS Queue -> Lambda Event Source Mapping
     if (srcType === 'aws_sqs_queue' && dstType === 'aws_lambda_function') {
-      blocks.push(`resource "aws_lambda_event_source_mapping" "${srcName}_trigger_${dstName}" {
+      blocks.push(`resource "aws_iam_role_policy" "${dstName}_consume_${srcName}" {
+  name = "${dstName}-consume-${srcName}"
+  role = aws_iam_role.${dstName}_exec_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]
+      Resource = aws_sqs_queue.${srcName}.arn
+    }]
+  })
+}
+
+resource "aws_lambda_event_source_mapping" "${srcName}_trigger_${dstName}" {
   event_source_arn = aws_sqs_queue.${srcName}.arn
   function_name    = aws_lambda_function.${dstName}.arn
   batch_size       = 10
   enabled          = true
+  depends_on       = [aws_iam_role_policy.${dstName}_consume_${srcName}]
 }`);
     }
 
     // 3. Kinesis Stream -> Lambda Event Source Mapping
     if (srcType === 'aws_kinesis_stream' && dstType === 'aws_lambda_function') {
-      blocks.push(`resource "aws_lambda_event_source_mapping" "${srcName}_stream_${dstName}" {
+      blocks.push(`resource "aws_iam_role_policy" "${dstName}_consume_${srcName}" {
+  name = "${dstName}-consume-${srcName}"
+  role = aws_iam_role.${dstName}_exec_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kinesis:GetRecords", "kinesis:GetShardIterator", "kinesis:DescribeStream", "kinesis:DescribeStreamSummary", "kinesis:ListShards", "kinesis:ListStreams"]
+      Resource = aws_kinesis_stream.${srcName}.arn
+    }]
+  })
+}
+
+resource "aws_lambda_event_source_mapping" "${srcName}_stream_${dstName}" {
   event_source_arn  = aws_kinesis_stream.${srcName}.arn
   function_name     = aws_lambda_function.${dstName}.arn
   starting_position = "LATEST"
   batch_size        = 100
+  depends_on        = [aws_iam_role_policy.${dstName}_consume_${srcName}]
 }`);
     }
 

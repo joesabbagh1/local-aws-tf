@@ -22,8 +22,19 @@ import {
   getDefaultConfigForService,
 } from '../data/awsCatalog';
 import { ARCHITECTURE_TEMPLATES } from '../data/templates';
-import { compileTerraformForEnvironment } from '../utils/terraformCompiler';
+import {
+  compileTerraformForEnvironment,
+  resolveNodeConfigForEnv,
+  sanitizeIdentifier,
+} from '../utils/terraformCompiler';
 import { parseTerraformHclToCanvas } from '../utils/hclImporter';
+import {
+  autoLayoutNodes,
+  findDropContainer,
+  normalizeNodes,
+  releaseChildren,
+  reparentNode,
+} from '../utils/canvasLayout';
 
 export type RightDrawerTab =
   | 'inspector'
@@ -63,7 +74,8 @@ interface CloudStudioState {
   isRunningCommand: boolean;
 
   // Actions
-  pushHistory: () => void;
+  /** Snapshot for undo. Calls sharing a coalesceKey within a short window collapse into one entry. */
+  pushHistory: (coalesceKey?: string) => void;
   undo: () => void;
   redo: () => void;
 
@@ -74,6 +86,8 @@ interface CloudStudioState {
   onNodesChange: OnNodesChange<CloudNode>;
   onEdgesChange: OnEdgesChange<CloudEdge>;
   onConnect: OnConnect;
+  onNodeDragStart: () => void;
+  onNodeDragStop: (nodeIds: string[]) => void;
 
   selectNode: (nodeId: string | null) => void;
   selectEdge: (edgeId: string | null) => void;
@@ -117,12 +131,51 @@ interface CloudStudioState {
     command: 'init' | 'validate' | 'plan' | 'apply' | 'destroy',
     envId?: EnvironmentId
   ) => Promise<void>;
+  fetchTerraformOutputs: (envId: EnvironmentId) => Promise<void>;
   appendTerminalLog: (msg: string) => void;
   clearTerminalLogs: () => void;
 }
 
 const initialTemplate = ARCHITECTURE_TEMPLATES[0];
 const ENV_ORDER: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
+const MAX_TERMINAL_LINES = 500;
+const HISTORY_COALESCE_MS = 1200;
+
+let lastHistoryPush = { key: '', at: 0 };
+
+const TF_PROGRESS_LINE =
+  /^(?:module\.[^\s]+\.)?([a-z0-9_]+)\.([A-Za-z0-9_-]+)(?:\[[^\]]*\])?: (Creating|Creation complete|Modifying|Modifications complete|Destroying|Destruction complete|Still creating|Still modifying)/;
+const TF_ERROR_RESOURCE = /with (?:module\.[^\s]+\.)?([a-z0-9_]+)\.([A-Za-z0-9_-]+)/;
+
+/** Maps a Terraform resource name (e.g. orders_fn or orders_fn_exec_role) back to its canvas node. */
+function buildResourceNameResolver(nodes: CloudNode[], envId: EnvironmentId) {
+  const entries = nodes
+    .filter((n) => n.data.envEnabled?.[envId] !== false)
+    .map((n) => ({ id: n.id, resName: sanitizeIdentifier(n.data.resourceName || n.data.label) }))
+    .sort((a, b) => b.resName.length - a.resName.length);
+
+  return (tfName: string): string | undefined =>
+    entries.find((e) => tfName === e.resName || tfName.startsWith(`${e.resName}_`))?.id;
+}
+
+function withProvisioningState(
+  nodes: CloudNode[],
+  envId: EnvironmentId,
+  decide: (node: CloudNode, current: ProvisioningState | undefined) => ProvisioningState | undefined
+): CloudNode[] {
+  return nodes.map((n) => {
+    const current = n.data.provisioningStatus?.[envId];
+    const next = decide(n, current);
+    if (!next || next === current) return n;
+    return {
+      ...n,
+      data: {
+        ...n.data,
+        provisioningStatus: { ...(n.data.provisioningStatus || {}), [envId]: next },
+      },
+    };
+  });
+}
 
 export const useCloudStore = create<CloudStudioState>()(
   persist(
@@ -131,7 +184,7 @@ export const useCloudStore = create<CloudStudioState>()(
       environments: { ...DEFAULT_ENVIRONMENTS },
       targetLocalEmulator: true,
 
-      nodes: initialTemplate.nodes,
+      nodes: normalizeNodes(initialTemplate.nodes),
       edges: initialTemplate.edges,
       selectedNodeId: initialTemplate.nodes[2]?.id || null,
       selectedEdgeId: null,
@@ -154,7 +207,18 @@ export const useCloudStore = create<CloudStudioState>()(
       ],
       isRunningCommand: false,
 
-      pushHistory: () => {
+      pushHistory: (coalesceKey) => {
+        const now = Date.now();
+        if (
+          coalesceKey &&
+          lastHistoryPush.key === coalesceKey &&
+          now - lastHistoryPush.at < HISTORY_COALESCE_MS
+        ) {
+          lastHistoryPush.at = now;
+          return;
+        }
+        lastHistoryPush = { key: coalesceKey || '', at: now };
+
         const { nodes, edges, past } = get();
         const snapshot: HistorySnapshot = {
           nodes: structuredClone(nodes),
@@ -169,6 +233,7 @@ export const useCloudStore = create<CloudStudioState>()(
       undo: () => {
         const { past, future, nodes, edges } = get();
         if (past.length === 0) return;
+        lastHistoryPush = { key: '', at: 0 };
         const previous = past[past.length - 1];
         const newPast = past.slice(0, past.length - 1);
         set({
@@ -182,6 +247,7 @@ export const useCloudStore = create<CloudStudioState>()(
       redo: () => {
         const { past, future, nodes, edges } = get();
         if (future.length === 0) return;
+        lastHistoryPush = { key: '', at: 0 };
         const next = future[0];
         const newFuture = future.slice(1);
         set({
@@ -273,6 +339,19 @@ export const useCloudStore = create<CloudStudioState>()(
         });
       },
 
+      onNodeDragStart: () => get().pushHistory(),
+
+      onNodeDragStop: (nodeIds) => {
+        let nodes = get().nodes;
+        for (const id of nodeIds) {
+          const node = nodes.find((n) => n.id === id);
+          if (!node) continue;
+          const container = findDropContainer(node, nodes);
+          nodes = reparentNode(nodes, id, container?.id);
+        }
+        if (nodes !== get().nodes) set({ nodes });
+      },
+
       selectNode: (nodeId) =>
         set({
           selectedNodeId: nodeId,
@@ -314,8 +393,11 @@ export const useCloudStore = create<CloudStudioState>()(
 
         const newNode: CloudNode = {
           id: newId,
-          type: 'awsNode',
+          type: svc.isContainer ? 'awsContainer' : 'awsNode',
           position: defaultPos,
+          ...(svc.isContainer
+            ? { width: svc.defaultWidth ?? 420, height: svc.defaultHeight ?? 280 }
+            : {}),
           data: {
             label: `${svc.shortName} ${indexSuffix}`,
             resourceName: `${cleanShort}_${indexSuffix}`,
@@ -335,12 +417,17 @@ export const useCloudStore = create<CloudStudioState>()(
           },
         };
 
-        set((state) => ({
-          nodes: [...state.nodes, newNode],
+        // Dropping onto a VPC / Subnet places the new resource inside it
+        let nodes = normalizeNodes([...get().nodes, newNode]);
+        const container = position ? findDropContainer(newNode, nodes) : undefined;
+        if (container) nodes = reparentNode(nodes, newId, container.id);
+
+        set({
+          nodes,
           selectedNodeId: newId,
           selectedEdgeId: null,
           rightTab: 'inspector',
-        }));
+        });
       },
 
       duplicateNode: (nodeId) => {
@@ -365,7 +452,7 @@ export const useCloudStore = create<CloudStudioState>()(
         };
 
         set((state) => ({
-          nodes: [...state.nodes.map((n) => ({ ...n, selected: false })), copyNode],
+          nodes: normalizeNodes([...state.nodes.map((n) => ({ ...n, selected: false })), copyNode]),
           selectedNodeId: newId,
         }));
       },
@@ -373,7 +460,7 @@ export const useCloudStore = create<CloudStudioState>()(
       deleteNode: (nodeId) => {
         get().pushHistory();
         set((state) => ({
-          nodes: state.nodes.filter((n) => n.id !== nodeId),
+          nodes: releaseChildren(state.nodes, nodeId).filter((n) => n.id !== nodeId),
           edges: state.edges.filter((e) => e.source !== nodeId && e.target !== nodeId),
           selectedNodeId: state.selectedNodeId === nodeId ? null : state.selectedNodeId,
         }));
@@ -388,15 +475,28 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       deleteSelectedElements: () => {
-        const { selectedNodeId, selectedEdgeId } = get();
-        if (selectedNodeId) {
-          get().deleteNode(selectedNodeId);
-        } else if (selectedEdgeId) {
-          get().deleteEdge(selectedEdgeId);
-        }
+        const { nodes, edges, selectedNodeId, selectedEdgeId } = get();
+        const nodeIds = new Set(nodes.filter((n) => n.selected).map((n) => n.id));
+        if (selectedNodeId) nodeIds.add(selectedNodeId);
+        const edgeIds = new Set(edges.filter((e) => e.selected).map((e) => e.id));
+        if (selectedEdgeId) edgeIds.add(selectedEdgeId);
+        if (nodeIds.size === 0 && edgeIds.size === 0) return;
+
+        get().pushHistory();
+        let remaining = nodes;
+        for (const id of nodeIds) remaining = releaseChildren(remaining, id);
+        set({
+          nodes: remaining.filter((n) => !nodeIds.has(n.id)),
+          edges: edges.filter(
+            (e) => !edgeIds.has(e.id) && !nodeIds.has(e.source) && !nodeIds.has(e.target)
+          ),
+          selectedNodeId: null,
+          selectedEdgeId: null,
+        });
       },
 
       updateNodeMetadata: (nodeId, patch) => {
+        get().pushHistory(`meta:${nodeId}:${Object.keys(patch).join(',')}`);
         set((state) => ({
           nodes: state.nodes.map((node) =>
             node.id === nodeId
@@ -413,6 +513,7 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       updateNodeProperty: (nodeId, key, value, scope) => {
+        get().pushHistory(`prop:${nodeId}:${scope}:${key}`);
         set((state) => ({
           nodes: state.nodes.map((node) => {
             if (node.id !== nodeId) return node;
@@ -449,6 +550,7 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       resetNodeEnvOverride: (nodeId, envId, key) => {
+        get().pushHistory();
         set((state) => ({
           nodes: state.nodes.map((node) => {
             if (node.id !== nodeId) return node;
@@ -473,6 +575,7 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       toggleNodeInEnvironment: (nodeId, envId) => {
+        get().pushHistory();
         set((state) => ({
           nodes: state.nodes.map((node) => {
             if (node.id !== nodeId) return node;
@@ -492,6 +595,7 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       updateNodeTags: (nodeId, tags) => {
+        get().pushHistory();
         set((state) => ({
           nodes: state.nodes.map((node) =>
             node.id === nodeId
@@ -508,6 +612,7 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       updateEdgeData: (edgeId, patch) => {
+        get().pushHistory(`edge:${edgeId}:${Object.keys(patch).join(',')}`);
         set((state) => ({
           edges: state.edges.map((edge) =>
             edge.id === edgeId
@@ -527,7 +632,7 @@ export const useCloudStore = create<CloudStudioState>()(
         const tpl = ARCHITECTURE_TEMPLATES.find((t) => t.id === templateId);
         if (!tpl) return;
         get().pushHistory();
-        const clonedNodes = structuredClone(tpl.nodes);
+        const clonedNodes = normalizeNodes(structuredClone(tpl.nodes));
         const clonedEdges = structuredClone(tpl.edges);
         set({
           nodes: clonedNodes,
@@ -543,7 +648,7 @@ export const useCloudStore = create<CloudStudioState>()(
         if (importedCount > 0) {
           get().pushHistory();
           set({
-            nodes,
+            nodes: autoLayoutNodes(normalizeNodes(nodes)),
             edges,
             selectedNodeId: nodes[0]?.id || null,
             selectedEdgeId: null,
@@ -576,7 +681,7 @@ export const useCloudStore = create<CloudStudioState>()(
           if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return false;
           get().pushHistory();
           set({
-            nodes: parsed.nodes,
+            nodes: normalizeNodes(parsed.nodes),
             edges: parsed.edges,
             environments: parsed.environments || get().environments,
             activeEnv: parsed.activeEnv || 'dev',
@@ -602,43 +707,7 @@ export const useCloudStore = create<CloudStudioState>()(
 
       autoLayoutCanvas: () => {
         get().pushHistory();
-        const nodes = get().nodes;
-        const categoryOrder: Record<string, number> = {
-          'Networking & Content Delivery': 0,
-          'Security, Identity, & Compliance': 1,
-          Compute: 2,
-          Containers: 2,
-          'Application Integration': 3,
-          Database: 4,
-          Storage: 4,
-          'Analytics & Streaming': 3,
-          'Developer Tools & AI': 3,
-          'Management & Governance': 4,
-        };
-
-        const columns: Record<number, CloudNode[]> = {};
-        for (const node of nodes) {
-          const svc = SERVICE_BY_TYPE[node.data.serviceType];
-          const col = svc ? (categoryOrder[svc.category] ?? 2) : 2;
-          if (!columns[col]) columns[col] = [];
-          columns[col].push(node);
-        }
-
-        const updatedNodes: CloudNode[] = [];
-        Object.entries(columns).forEach(([colStr, colNodes]) => {
-          const colIdx = Number(colStr);
-          colNodes.forEach((n, rowIdx) => {
-            updatedNodes.push({
-              ...n,
-              position: {
-                x: 80 + colIdx * 340,
-                y: 70 + rowIdx * 200,
-              },
-            });
-          });
-        });
-
-        set({ nodes: updatedNodes });
+        set({ nodes: autoLayoutNodes(get().nodes) });
       },
 
       refreshEmulatorStatuses: async () => {
@@ -664,6 +733,7 @@ export const useCloudStore = create<CloudStudioState>()(
           envId: EnvironmentId;
           resourceName: string;
           runtime: string;
+          handler: string;
           code?: string;
         }[] = [];
 
@@ -690,13 +760,12 @@ export const useCloudStore = create<CloudStudioState>()(
 
           for (const n of nodes) {
             if (n.data.serviceType === 'aws_lambda_function' && n.data.envEnabled?.[envId] !== false) {
-              const resName = (n.data.resourceName || n.data.label)
-                .toLowerCase()
-                .replace(/[^a-z0-9_]/g, '_');
+              const cfg = resolveNodeConfigForEnv(n, envId);
               lambdaArtifacts.push({
                 envId,
-                resourceName: resName,
-                runtime: String(n.data.baseConfig?.runtime || 'nodejs20.x'),
+                resourceName: sanitizeIdentifier(n.data.resourceName || n.data.label),
+                runtime: String(cfg.runtime || 'nodejs20.x'),
+                handler: String(cfg.handler || 'index.handler'),
                 code: n.data.inlineCode,
               });
             }
@@ -764,35 +833,73 @@ export const useCloudStore = create<CloudStudioState>()(
         const envId = targetEnvId || get().activeEnv;
         const profile = get().environments[envId];
         const { syncTerraformToDisk, appendTerminalLog } = get();
+        const tag = `[${envId.toUpperCase()}]`;
 
         set({ isRunningCommand: true });
 
-        // Mark active nodes as planning/provisioning on canvas
-        const interimState: ProvisioningState =
-          command === 'apply' ? 'provisioning' : command === 'plan' ? 'planning' : 'unapplied';
+        const interimState: ProvisioningState | undefined =
+          command === 'apply' || command === 'destroy'
+            ? 'provisioning'
+            : command === 'plan'
+              ? 'planning'
+              : undefined;
+        const previousStates = Object.fromEntries(
+          get().nodes.map((n) => [n.id, n.data.provisioningStatus?.[envId]])
+        );
+        if (interimState) {
+          set((state) => ({
+            nodes: withProvisioningState(state.nodes, envId, (n) =>
+              n.data.envEnabled?.[envId] !== false ? interimState : undefined
+            ),
+          }));
+        }
 
-        set((state) => ({
-          nodes: state.nodes.map((n) =>
-            n.data.envEnabled?.[envId] !== false
-              ? {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    provisioningStatus: {
-                      ...(n.data.provisioningStatus || {}),
-                      [envId]: interimState,
-                    },
-                  },
-                }
-              : n
-          ),
-        }));
+        const synced = await syncTerraformToDisk();
+        if (!synced.ok) {
+          appendTerminalLog(`❌ ${tag} Could not write ./terraform-out (is the dev server running?)`);
+          set((state) => ({
+            nodes: withProvisioningState(state.nodes, envId, (n) => previousStates[n.id] ?? 'unapplied'),
+            isRunningCommand: false,
+          }));
+          return;
+        }
 
-        await syncTerraformToDisk();
         appendTerminalLog(
-          `🚀 [${envId.toUpperCase()}] Running 'terraform ${command}' in ./terraform-out/environments/${envId} (Endpoint: https://127.0.0.1:${profile.emulatorPort})...`
+          `🚀 ${tag} terraform ${command} in ./terraform-out/environments/${envId} → https://127.0.0.1:${profile.emulatorPort}`
         );
 
+        const resolveNode = buildResourceNameResolver(get().nodes, envId);
+        const settled = new Map<string, ProvisioningState>();
+        const markNode = (nodeId: string | undefined, state: ProvisioningState) => {
+          if (!nodeId) return;
+          settled.set(nodeId, state);
+          set((s) => ({
+            nodes: withProvisioningState(s.nodes, envId, (n) => (n.id === nodeId ? state : undefined)),
+          }));
+        };
+
+        const handleLine = (line: string) => {
+          if (!line.trim()) return;
+          appendTerminalLog(line);
+          const progress = line.match(TF_PROGRESS_LINE);
+          if (progress) {
+            const nodeId = resolveNode(progress[2]);
+            const verb = progress[3];
+            if (verb === 'Creation complete' || verb === 'Modifications complete') {
+              markNode(nodeId, 'provisioned');
+            } else if (verb === 'Destruction complete') {
+              markNode(nodeId, 'unapplied');
+            } else if (nodeId && !settled.has(nodeId)) {
+              markNode(nodeId, 'provisioning');
+              settled.delete(nodeId);
+            }
+            return;
+          }
+          const errorRes = line.match(TF_ERROR_RESOURCE);
+          if (errorRes) markNode(resolveNode(errorRes[2]), 'failed');
+        };
+
+        let exitCode = 1;
         try {
           const res = await fetch('/api/terraform/run', {
             method: 'POST',
@@ -804,54 +911,114 @@ export const useCloudStore = create<CloudStudioState>()(
               region: profile.region,
             }),
           });
-          const data = await res.json();
+          if (!res.body) throw new Error(`HTTP ${res.status}`);
 
-          if (data.output) {
-            appendTerminalLog(data.output);
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          for (;;) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value, { stream: !done });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+            for (const line of lines) {
+              const exitMatch = line.match(/^__LC_EXIT__:(-?\d+)$/);
+              if (exitMatch) exitCode = Number(exitMatch[1]);
+              else handleLine(line);
+            }
+            if (done) break;
           }
+          if (buffer) handleLine(buffer);
+        } catch (err: any) {
+          appendTerminalLog(`❌ ${tag} Error: ${err?.message}`);
+        }
 
-          const finalState: ProvisioningState = data.ok
-            ? command === 'apply'
-              ? 'provisioned'
-              : command === 'destroy'
-              ? 'unapplied'
-              : 'provisioned'
-            : 'failed';
+        const ok = exitCode === 0;
+        set((state) => ({
+          nodes: withProvisioningState(state.nodes, envId, (n, current) => {
+            if (n.data.envEnabled?.[envId] === false || settled.has(n.id)) return undefined;
+            if (current !== interimState) return undefined;
+            if (!ok) return command === 'plan' ? (previousStates[n.id] ?? 'unapplied') : 'failed';
+            if (command === 'apply') return 'provisioned';
+            if (command === 'destroy') return 'unapplied';
+            return previousStates[n.id] ?? 'unapplied';
+          }),
+          isRunningCommand: false,
+        }));
 
+        appendTerminalLog(
+          ok
+            ? `✅ ${tag} terraform ${command} completed successfully.`
+            : `⚠️ ${tag} terraform ${command} exited with code ${exitCode}.`
+        );
+
+        if (ok && command === 'apply') await get().fetchTerraformOutputs(envId);
+        if (ok && command === 'destroy') {
           set((state) => ({
             nodes: state.nodes.map((n) =>
-              n.data.envEnabled?.[envId] !== false
+              n.data.provisionedOutputs?.[envId]
                 ? {
                     ...n,
                     data: {
                       ...n.data,
-                      provisioningStatus: {
-                        ...(n.data.provisioningStatus || {}),
-                        [envId]: finalState,
-                      },
+                      provisionedOutputs: { ...n.data.provisionedOutputs, [envId]: undefined },
                     },
                   }
                 : n
             ),
           }));
+        }
+      },
 
-          if (data.ok) {
-            appendTerminalLog(`✅ [${envId.toUpperCase()}] terraform ${command} completed successfully.`);
-          } else {
-            appendTerminalLog(
-              `⚠️ [${envId.toUpperCase()}] terraform ${command} exited with code ${data.code ?? 1}.`
-            );
+      fetchTerraformOutputs: async (envId) => {
+        try {
+          const res = await fetch(`/api/terraform/outputs?envId=${envId}`);
+          const data = await res.json();
+          if (!data.ok || !data.outputs) return;
+
+          const byNode: Record<string, Record<string, string>> = {};
+          const resNames = get()
+            .nodes.map((n) => ({ id: n.id, resName: sanitizeIdentifier(n.data.resourceName || n.data.label) }))
+            .sort((a, b) => b.resName.length - a.resName.length);
+
+          for (const [name, out] of Object.entries<any>(data.outputs)) {
+            const match = resNames.find((r) => name.startsWith(`${r.resName}_`));
+            if (!match) continue;
+            const key = name.slice(match.resName.length + 1);
+            const value = out?.value;
+            byNode[match.id] = {
+              ...(byNode[match.id] || {}),
+              [key]: typeof value === 'string' ? value : JSON.stringify(value),
+            };
           }
-        } catch (err: any) {
-          appendTerminalLog(`❌ [${envId.toUpperCase()}] Error: ${err?.message}`);
-        } finally {
-          set({ isRunningCommand: false });
+
+          set((state) => ({
+            nodes: state.nodes.map((n) =>
+              byNode[n.id]
+                ? {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      provisionedOutputs: { ...(n.data.provisionedOutputs || {}), [envId]: byNode[n.id] },
+                    },
+                  }
+                : n
+            ),
+          }));
+          get().appendTerminalLog(
+            `📤 [${envId.toUpperCase()}] Captured ${Object.keys(data.outputs).length} Terraform outputs onto canvas nodes.`
+          );
+        } catch {
+          // Outputs are a convenience; the apply itself already succeeded
         }
       },
 
       appendTerminalLog: (msg) =>
         set((state) => ({
-          terminalLogs: [...state.terminalLogs.slice(-60), `[${new Date().toLocaleTimeString()}] ${msg}`],
+          terminalLogs: [
+            ...state.terminalLogs.slice(-(MAX_TERMINAL_LINES - 1)),
+            `[${new Date().toLocaleTimeString()}] ${msg}`,
+          ],
         })),
 
       clearTerminalLogs: () => set({ terminalLogs: [] }),
@@ -865,6 +1032,18 @@ export const useCloudStore = create<CloudStudioState>()(
         nodes: state.nodes,
         edges: state.edges,
       }),
+      // Older saves predate VPC / Subnet containers; bring them into the current canvas shape
+      merge: (persisted, current) => {
+        const saved = (persisted || {}) as Partial<CloudStudioState>;
+        let nodes = normalizeNodes(saved.nodes ?? current.nodes);
+        // A reload mid-run leaves nodes stuck in an in-flight state
+        for (const envId of ENV_ORDER) {
+          nodes = withProvisioningState(nodes, envId, (_n, state) =>
+            state === 'planning' || state === 'provisioning' ? 'unapplied' : undefined
+          );
+        }
+        return { ...current, ...saved, nodes };
+      },
     }
   )
 );

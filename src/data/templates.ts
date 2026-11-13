@@ -291,8 +291,10 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
     nodes: [
       {
         id: 'node-vpc-main',
-        type: 'awsNode',
-        position: { x: 50, y: 70 },
+        type: 'awsContainer',
+        position: { x: 40, y: 40 },
+        width: 980,
+        height: 560,
         data: {
           label: 'Primary Cloud VPC',
           resourceName: 'primary_vpc',
@@ -316,8 +318,11 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
       },
       {
         id: 'node-subnet-public',
-        type: 'awsNode',
-        position: { x: 50, y: 290 },
+        type: 'awsContainer',
+        parentId: 'node-vpc-main',
+        position: { x: 28, y: 64 },
+        width: 320,
+        height: 270,
         data: {
           label: 'Public Ingress Subnet',
           resourceName: 'public_ingress_subnet',
@@ -338,9 +343,36 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
         },
       },
       {
+        id: 'node-subnet-private',
+        type: 'awsContainer',
+        parentId: 'node-vpc-main',
+        position: { x: 372, y: 64 },
+        width: 580,
+        height: 470,
+        data: {
+          label: 'Private App Subnet',
+          resourceName: 'private_app_subnet',
+          serviceType: 'aws_subnet',
+          baseConfig: {
+            cidr_block: '10.10.10.0/24',
+            availability_zone: 'us-east-1a',
+            map_public_ip_on_launch: false,
+            tier: 'private',
+          },
+          envOverrides: {
+            testing: { cidr_block: '10.20.10.0/24' },
+            staging: { cidr_block: '10.30.10.0/24', availability_zone: 'us-west-2a' },
+            prod: { cidr_block: '10.100.10.0/24', availability_zone: 'us-west-2a' },
+          },
+          envEnabled: { dev: true, testing: true, staging: true, prod: true },
+          tags: { Tier: 'Private' },
+        },
+      },
+      {
         id: 'node-alb-ingress',
         type: 'awsNode',
-        position: { x: 380, y: 175 },
+        parentId: 'node-subnet-public',
+        position: { x: 28, y: 64 },
         data: {
           label: 'Public Ingress ALB',
           resourceName: 'public_ingress_alb',
@@ -363,7 +395,8 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
       {
         id: 'node-ecs-api',
         type: 'awsNode',
-        position: { x: 710, y: 175 },
+        parentId: 'node-subnet-private',
+        position: { x: 22, y: 150 },
         data: {
           label: 'Core Backend Fargate Service',
           resourceName: 'core_backend_fargate',
@@ -394,7 +427,8 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
       {
         id: 'node-rds-pg',
         type: 'awsNode',
-        position: { x: 1060, y: 50 },
+        parentId: 'node-subnet-private',
+        position: { x: 298, y: 56 },
         data: {
           label: 'Primary PostgreSQL DB',
           resourceName: 'primary_postgres_db',
@@ -435,7 +469,8 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
       {
         id: 'node-redis-cache',
         type: 'awsNode',
-        position: { x: 1060, y: 245 },
+        parentId: 'node-subnet-private',
+        position: { x: 298, y: 270 },
         data: {
           label: 'Session & Query Cache',
           resourceName: 'session_redis_cache',
@@ -457,7 +492,7 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
       {
         id: 'node-secrets-db',
         type: 'awsNode',
-        position: { x: 1060, y: 430 },
+        position: { x: 1080, y: 250 },
         data: {
           label: 'Database Credentials Vault',
           resourceName: 'db_credentials_secret',
@@ -476,20 +511,6 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
       },
     ],
     edges: [
-      {
-        id: 'e-vpc-sub',
-        source: 'node-vpc-main',
-        target: 'node-subnet-public',
-        animated: false,
-        data: { relationshipType: 'network_attachment', label: 'Contains Subnet' },
-      },
-      {
-        id: 'e-sub-alb',
-        source: 'node-subnet-public',
-        target: 'node-alb-ingress',
-        animated: false,
-        data: { relationshipType: 'network_attachment', label: 'VPC Placement' },
-      },
       {
         id: 'e-alb-ecs',
         source: 'node-alb-ingress',
