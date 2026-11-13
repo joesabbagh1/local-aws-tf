@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.log
+.env
+.env.*
+# terraform runtime state
+**/.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl

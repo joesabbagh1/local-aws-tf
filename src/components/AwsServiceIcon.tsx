@@ -1,0 +1,88 @@
+import React from 'react';
+import {
+  Network,
+  GitFork,
+  Globe,
+  ArrowUpRight,
+  Compass,
+  ShieldAlert,
+  Scale,
+  Webhook,
+  Radio,
+  Signpost,
+  Cpu,
+  Zap,
+  Layers,
+  Boxes,
+  Ship,
+  Package,
+  HardDrive,
+  FolderSync,
+  Table,
+  Database,
+  Gauge,
+  ListOrdered,
+  BellRing,
+  Waypoints,
+  Workflow,
+  KeyRound,
+  Lock,
+  FileKey,
+  Users,
+  Activity,
+  Sliders,
+  Waves,
+  Search,
+  Sparkles,
+  Server,
+} from 'lucide-react';
+
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string; style?: React.CSSProperties }>> = {
+  Network,
+  GitFork,
+  Globe,
+  ArrowUpRight,
+  Compass,
+  ShieldAlert,
+  Scale,
+  Webhook,
+  Radio,
+  Signpost,
+  Cpu,
+  Zap,
+  Layers,
+  Boxes,
+  Ship,
+  Package,
+  HardDrive,
+  FolderSync,
+  Table,
+  Database,
+  Gauge,
+  ListOrdered,
+  BellRing,
+  Waypoints,
+  Workflow,
+  KeyRound,
+  Lock,
+  FileKey,
+  Users,
+  Activity,
+  Sliders,
+  Waves,
+  Search,
+  Sparkles,
+};
+
+export function AwsServiceIcon({
+  iconName,
+  className = 'w-4 h-4',
+  style,
+}: {
+  iconName: string;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const IconComp = ICON_MAP[iconName] || Server;
+  return <IconComp className={className} style={style} />;
+}
