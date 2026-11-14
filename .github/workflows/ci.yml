@@ -29,11 +29,33 @@ jobs:
         with:
           terraform_version: 1.10.5
           terraform_wrapper: false
+      # Absolute path: environment variables don't expand ~
       - uses: actions/cache@v4
         with:
-          path: ~/.terraform.d/plugin-cache
+          path: ${{ runner.temp }}/terraform-plugins
           key: terraform-plugins-${{ hashFiles('tests/golden/**/provider.tf') }}
       # The compiled blueprints in tests/golden must be valid Terraform for every environment
       - run: npm run validate:golden
         env:
-          TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugins
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      # Browser tests against the built app; Terraform runs are mocked, so no Docker or Terraform needed
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
