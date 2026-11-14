@@ -37,7 +37,8 @@ export default {
         info: '#6E94B0',
       },
       fontSize: {
-        '2xs': ['10.5px', '14px'],
+        '2xs': ['11.5px', '15px'],
+        xs: ['13px', '18px'],
       },
     },
   },

@@ -10,7 +10,7 @@
     background-color: theme('colors.base');
     color: theme('colors.fg.DEFAULT');
     font-family: theme('fontFamily.sans');
-    font-size: 13px;
+    font-size: 14px;
     user-select: none;
   }
   ::selection {

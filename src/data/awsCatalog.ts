@@ -20,6 +20,7 @@ export const DEFAULT_ENVIRONMENTS: Record<EnvironmentId, EnvironmentProfile> = {
       ManagedBy: 'LocalCloudStudio',
       EmulatorPort: '9297',
     },
+    usage: { requestsMillions: 0.2, dataTransferGb: 5, storageGb: 5, logsGb: 2 },
   },
   testing: {
     id: 'testing',
@@ -40,6 +41,7 @@ export const DEFAULT_ENVIRONMENTS: Record<EnvironmentId, EnvironmentProfile> = {
       ManagedBy: 'LocalCloudStudio',
       EmulatorPort: '9298',
     },
+    usage: { requestsMillions: 0.5, dataTransferGb: 10, storageGb: 10, logsGb: 5 },
   },
   staging: {
     id: 'staging',
@@ -60,6 +62,7 @@ export const DEFAULT_ENVIRONMENTS: Record<EnvironmentId, EnvironmentProfile> = {
       ManagedBy: 'LocalCloudStudio',
       EmulatorPort: '9299',
     },
+    usage: { requestsMillions: 2, dataTransferGb: 50, storageGb: 50, logsGb: 20 },
   },
   prod: {
     id: 'prod',
@@ -81,6 +84,7 @@ export const DEFAULT_ENVIRONMENTS: Record<EnvironmentId, EnvironmentProfile> = {
       Criticality: 'High',
       EmulatorPort: '9300',
     },
+    usage: { requestsMillions: 25, dataTransferGb: 800, storageGb: 500, logsGb: 150 },
   },
 };
 
@@ -111,7 +115,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Network',
     description: 'Isolated virtual network environment in AWS with custom CIDR routing and DNS resolution.',
     terraformResourceType: 'aws_vpc',
-    emulatorSupportLevel: 'full',
     isContainer: true,
     defaultWidth: 560,
     defaultHeight: 380,
@@ -137,7 +140,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'GitFork',
     description: 'Public or Private IP address range partition inside a VPC Availability Zone.',
     terraformResourceType: 'aws_subnet',
-    emulatorSupportLevel: 'full',
     isContainer: true,
     defaultWidth: 320,
     defaultHeight: 220,
@@ -168,7 +170,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Globe',
     description: 'Horizontally scaled, redundant, and highly available VPC component allowing communication between VPC and the internet.',
     terraformResourceType: 'aws_internet_gateway',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'auto_route_default', label: 'Create 0.0.0.0/0 Route Automatically', type: 'boolean', defaultValue: true, group: 'networking' },
     ],
@@ -186,7 +187,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'ArrowUpRight',
     description: 'Network Address Translation (NAT) service so private subnet instances can connect outbound to the internet.',
     terraformResourceType: 'aws_nat_gateway',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'connectivity_type', label: 'Connectivity Type', type: 'select', defaultValue: 'public', group: 'networking', options: [{ label: 'Public (Requires Elastic IP)', value: 'public' }, { label: 'Private', value: 'private' }] },
       { key: 'allocate_eip', label: 'Auto-Allocate Elastic IP', type: 'boolean', defaultValue: true, group: 'networking' },
@@ -205,7 +205,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Compass',
     description: 'Set of routing rules (routes) that determine where network traffic from your subnet or gateway is directed.',
     terraformResourceType: 'aws_route_table',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'default_cidr_block', label: 'Default Destination CIDR', type: 'cidr', defaultValue: '0.0.0.0/0', group: 'networking' },
       { key: 'propagate_vgws', label: 'Propagate Virtual Gateways', type: 'boolean', defaultValue: false, group: 'advanced' },
@@ -224,7 +223,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'ShieldAlert',
     description: 'Virtual stateful firewall for instances, load balancers, and databases to control inbound and outbound traffic.',
     terraformResourceType: 'aws_security_group',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'description', label: 'Description', type: 'string', defaultValue: 'Managed by LocalCloud Studio', group: 'general' },
       { key: 'ingress_port', label: 'Primary Ingress Port', type: 'number', defaultValue: 443, group: 'security', envConfigurable: true },
@@ -246,7 +244,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Scale',
     description: 'Distributes incoming application or network traffic across multiple targets, such as EC2, ECS, and Lambda.',
     terraformResourceType: 'aws_lb',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'load_balancer_type', label: 'Load Balancer Type', type: 'select', defaultValue: 'application', group: 'general', options: [{ label: 'Application (Layer 7 HTTP/HTTPS)', value: 'application' }, { label: 'Network (Layer 4 TCP/UDP/TLS)', value: 'network' }] },
       { key: 'internal', label: 'Internal (Private) Load Balancer', type: 'boolean', defaultValue: false, group: 'networking', envConfigurable: true },
@@ -270,7 +267,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Webhook',
     description: 'Fully managed service that makes it easy for developers to create, publish, maintain, monitor, and secure APIs.',
     terraformResourceType: 'aws_apigatewayv2_api',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'protocol_type', label: 'Protocol Type', type: 'select', defaultValue: 'HTTP', group: 'general', options: [{ label: 'HTTP API (v2)', value: 'HTTP' }, { label: 'WebSocket API (v2)', value: 'WEBSOCKET' }] },
       { key: 'stage_name', label: 'Default Stage Name', type: 'string', defaultValue: '$default', group: 'general', envConfigurable: true },
@@ -293,7 +289,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Radio',
     description: 'Global content delivery network (CDN) service built for high-speed, low-latency content delivery and edge security.',
     terraformResourceType: 'aws_cloudfront_distribution',
-    emulatorSupportLevel: 'high',
     schema: [
       { key: 'enabled', label: 'Distribution Enabled', type: 'boolean', defaultValue: true, group: 'general' },
       { key: 'default_root_object', label: 'Default Root Object', type: 'string', defaultValue: 'index.html', group: 'general' },
@@ -323,7 +318,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Signpost',
     description: 'Highly available and scalable cloud Domain Name System (DNS) web service and traffic router.',
     terraformResourceType: 'aws_route53_zone',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'domain_name', label: 'Hosted Zone Domain Name', type: 'string', defaultValue: 'internal.localcloud.dev', group: 'general', envConfigurable: true },
       { key: 'private_zone', label: 'Private Hosted Zone (VPC-only)', type: 'boolean', defaultValue: false, group: 'networking', envConfigurable: true },
@@ -348,7 +342,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Cpu',
     description: 'Secure and resizable compute capacity in the cloud supporting custom AMIs, EBS volumes, and user-data.',
     terraformResourceType: 'aws_instance',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'ami', label: 'AMI ID', type: 'string', defaultValue: 'ami-0c55b159cbfafe1f0', group: 'general', envConfigurable: true },
       { key: 'instance_type', label: 'Instance Type', type: 'select', defaultValue: 't3.micro', group: 'scaling', envConfigurable: true, options: [
@@ -383,7 +376,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Zap',
     description: 'Run code without provisioning or managing servers. Automatically scales and integrates with AWS Emulator.',
     terraformResourceType: 'aws_lambda_function',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'runtime', label: 'Runtime Environment', type: 'select', defaultValue: 'nodejs20.x', group: 'general', options: [
         { label: 'Node.js 20.x', value: 'nodejs20.x' },
@@ -415,7 +407,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Layers',
     description: 'Automatically adjusts EC2 compute capacity to maintain steady, predictable performance at the lowest possible cost.',
     terraformResourceType: 'aws_autoscaling_group',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'min_size', label: 'Minimum Instances', type: 'number', defaultValue: 1, group: 'scaling', envConfigurable: true },
       { key: 'max_size', label: 'Maximum Instances', type: 'number', defaultValue: 4, group: 'scaling', envConfigurable: true },
@@ -447,7 +438,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Boxes',
     description: 'Fully managed container orchestration service running serverless Fargate tasks with task definitions.',
     terraformResourceType: 'aws_ecs_service',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'container_image', label: 'Container Image URI', type: 'string', defaultValue: 'public.ecr.aws/nginx/nginx:stable-alpine', group: 'general', envConfigurable: true },
       { key: 'container_port', label: 'Container Port', type: 'number', defaultValue: 80, group: 'networking' },
@@ -484,7 +474,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Ship',
     description: 'Managed Kubernetes control plane and worker node group for cloud-native containerized workloads.',
     terraformResourceType: 'aws_eks_cluster',
-    emulatorSupportLevel: 'high',
     schema: [
       { key: 'kubernetes_version', label: 'Kubernetes Version', type: 'select', defaultValue: '1.31', group: 'general', options: [{ label: '1.31', value: '1.31' }, { label: '1.30', value: '1.30' }, { label: '1.29', value: '1.29' }] },
       { key: 'endpoint_public_access', label: 'Public Control Plane Endpoint', type: 'boolean', defaultValue: true, group: 'networking', envConfigurable: true },
@@ -506,7 +495,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Package',
     description: 'Fully managed Docker & OCI container registry with image scanning and lifecycle policies.',
     terraformResourceType: 'aws_ecr_repository',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'image_tag_mutability', label: 'Image Tag Mutability', type: 'select', defaultValue: 'MUTABLE', group: 'security', envConfigurable: true, options: [{ label: 'MUTABLE', value: 'MUTABLE' }, { label: 'IMMUTABLE', value: 'IMMUTABLE' }] },
       { key: 'scan_on_push', label: 'Vulnerability Scan on Push', type: 'boolean', defaultValue: true, group: 'security', envConfigurable: true },
@@ -530,7 +518,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'HardDrive',
     description: 'Object storage built to store and retrieve any amount of data with versioning, encryption, and public access blocks.',
     terraformResourceType: 'aws_s3_bucket',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'bucket_prefix', label: 'Bucket Base Name', type: 'string', defaultValue: 'app-assets-storage', group: 'general', envConfigurable: true },
       { key: 'versioning_enabled', label: 'Enable Object Versioning', type: 'boolean', defaultValue: true, group: 'general', envConfigurable: true },
@@ -554,7 +541,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'FolderSync',
     description: 'Serverless, fully elastic shared NFS file storage for EC2, ECS, EKS, and Lambda.',
     terraformResourceType: 'aws_efs_file_system',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'performance_mode', label: 'Performance Mode', type: 'select', defaultValue: 'generalPurpose', group: 'scaling', options: [{ label: 'General Purpose', value: 'generalPurpose' }, { label: 'Max I/O', value: 'maxIO' }] },
       { key: 'throughput_mode', label: 'Throughput Mode', type: 'select', defaultValue: 'bursting', group: 'scaling', envConfigurable: true, options: [{ label: 'Bursting', value: 'bursting' }, { label: 'Elastic', value: 'elastic' }, { label: 'Provisioned', value: 'provisioned' }] },
@@ -579,7 +565,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Table',
     description: 'Fast, flexible NoSQL database service for single-digit millisecond performance at any scale.',
     terraformResourceType: 'aws_dynamodb_table',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'billing_mode', label: 'Capacity Billing Mode', type: 'select', defaultValue: 'PAY_PER_REQUEST', group: 'scaling', envConfigurable: true, options: [
         { label: 'On-Demand (PAY_PER_REQUEST)', value: 'PAY_PER_REQUEST' },
@@ -615,7 +600,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Database',
     description: 'Managed relational database supporting PostgreSQL, MySQL, MariaDB with Multi-AZ high availability and automated backups.',
     terraformResourceType: 'aws_db_instance',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'engine', label: 'Database Engine', type: 'select', defaultValue: 'postgres', group: 'general', options: [
         { label: 'PostgreSQL', value: 'postgres' },
@@ -653,7 +637,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Gauge',
     description: 'Fully managed in-memory data store and cache for sub-millisecond latency response times.',
     terraformResourceType: 'aws_elasticache_cluster',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'engine', label: 'Cache Engine', type: 'select', defaultValue: 'redis', group: 'general', options: [{ label: 'Redis / Valkey', value: 'redis' }, { label: 'Memcached', value: 'memcached' }] },
       { key: 'node_type', label: 'Cache Node Type', type: 'select', defaultValue: 'cache.t4g.micro', group: 'scaling', envConfigurable: true, options: [
@@ -683,7 +666,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'ListOrdered',
     description: 'Fully managed message queuing for microservices, distributed systems, and serverless applications.',
     terraformResourceType: 'aws_sqs_queue',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'fifo_queue', label: 'FIFO Queue (Exact-Once Ordering)', type: 'boolean', defaultValue: false, group: 'general' },
       { key: 'visibility_timeout_seconds', label: 'Visibility Timeout (seconds)', type: 'number', defaultValue: 30, group: 'general', envConfigurable: true },
@@ -708,7 +690,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'BellRing',
     description: 'Fully managed pub/sub messaging for A2A fanout to SQS, Lambda, HTTP webhooks, and A2P notifications.',
     terraformResourceType: 'aws_sns_topic',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'fifo_topic', label: 'FIFO Topic', type: 'boolean', defaultValue: false, group: 'general' },
       { key: 'content_based_deduplication', label: 'Content-Based Deduplication', type: 'boolean', defaultValue: false, group: 'general' },
@@ -728,7 +709,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Waypoints',
     description: 'Serverless event bus that makes it easy to build event-driven applications at scale across AWS services.',
     terraformResourceType: 'aws_cloudwatch_event_bus',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'event_pattern_source', label: 'Rule Event Source Pattern', type: 'string', defaultValue: 'custom.app.orders', group: 'general' },
       { key: 'schedule_expression', label: 'Optional Schedule Cron (e.g. rate(5 minutes))', type: 'string', defaultValue: '', group: 'general', envConfigurable: true },
@@ -748,7 +728,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Workflow',
     description: 'Visual workflow orchestrator for distributed microservices, Lambda functions, and resilience retries.',
     terraformResourceType: 'aws_sfn_state_machine',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'type', label: 'Workflow Type', type: 'select', defaultValue: 'STANDARD', group: 'general', envConfigurable: true, options: [{ label: 'STANDARD (Long-running, auditable)', value: 'STANDARD' }, { label: 'EXPRESS (High-volume, short-duration)', value: 'EXPRESS' }] },
       { key: 'tracing_enabled', label: 'Enable X-Ray Tracing', type: 'boolean', defaultValue: true, group: 'advanced' },
@@ -771,7 +750,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'KeyRound',
     description: 'Identity with specific permissions and trust policies assumed by Lambda, EC2, ECS, or users.',
     terraformResourceType: 'aws_iam_role',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'principal_service', label: 'Trusted AWS Service Principal', type: 'select', defaultValue: 'lambda.amazonaws.com', group: 'security', options: [
         { label: 'lambda.amazonaws.com', value: 'lambda.amazonaws.com' },
@@ -797,7 +775,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Lock',
     description: 'Create and control cryptographic keys used to encrypt and digitally sign your data across AWS services.',
     terraformResourceType: 'aws_kms_key',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'key_usage', label: 'Key Usage', type: 'select', defaultValue: 'ENCRYPT_DECRYPT', group: 'security', options: [{ label: 'ENCRYPT_DECRYPT', value: 'ENCRYPT_DECRYPT' }, { label: 'SIGN_VERIFY', value: 'SIGN_VERIFY' }] },
       { key: 'enable_key_rotation', label: 'Enable Automatic Annual Key Rotation', type: 'boolean', defaultValue: true, group: 'security', envConfigurable: true },
@@ -818,7 +795,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'FileKey',
     description: 'Rotate, manage, and retrieve database credentials, API keys, and other secrets throughout their lifecycle.',
     terraformResourceType: 'aws_secretsmanager_secret',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'secret_prefix', label: 'Secret Path Name', type: 'string', defaultValue: 'app/database/credentials', group: 'general', envConfigurable: true },
       { key: 'recovery_window_in_days', label: 'Recovery Window Days (0 = immediate delete)', type: 'number', defaultValue: 0, group: 'security', envConfigurable: true },
@@ -838,7 +814,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Users',
     description: 'Customer identity and access management (CIAM) with OAuth 2.0, OIDC, MFA, and JWT issuance.',
     terraformResourceType: 'aws_cognito_user_pool',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'mfa_configuration', label: 'MFA Requirement', type: 'select', defaultValue: 'OFF', group: 'security', envConfigurable: true, options: [{ label: 'OFF', value: 'OFF' }, { label: 'OPTIONAL', value: 'OPTIONAL' }, { label: 'ON (Required)', value: 'ON' }] },
       { key: 'password_minimum_length', label: 'Minimum Password Length', type: 'number', defaultValue: 8, group: 'security', envConfigurable: true },
@@ -864,7 +839,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Activity',
     description: 'Centralized log aggregation, retention governance, and metric threshold alarms.',
     terraformResourceType: 'aws_cloudwatch_log_group',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'log_group_prefix', label: 'Log Group Path', type: 'string', defaultValue: '/aws/localcloud/service', group: 'general', envConfigurable: true },
       { key: 'retention_in_days', label: 'Log Retention (Days)', type: 'select', defaultValue: '14', group: 'general', envConfigurable: true, options: [
@@ -891,7 +865,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Sliders',
     description: 'Hierarchical configuration data management and encrypted parameter storage.',
     terraformResourceType: 'aws_ssm_parameter',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'param_name', label: 'Parameter Hierarchy Path', type: 'string', defaultValue: '/config/app/feature_flags', group: 'general', envConfigurable: true },
       { key: 'param_type', label: 'Parameter Type', type: 'select', defaultValue: 'String', group: 'general', options: [{ label: 'String', value: 'String' }, { label: 'StringList', value: 'StringList' }, { label: 'SecureString', value: 'SecureString' }] },
@@ -915,7 +888,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Waves',
     description: 'Massively scalable and durable real-time data streaming service for clickstreams, logs, and event telemetry.',
     terraformResourceType: 'aws_kinesis_stream',
-    emulatorSupportLevel: 'full',
     schema: [
       { key: 'stream_mode', label: 'Capacity Mode', type: 'select', defaultValue: 'ON_DEMAND', group: 'scaling', envConfigurable: true, options: [{ label: 'ON_DEMAND', value: 'ON_DEMAND' }, { label: 'PROVISIONED', value: 'PROVISIONED' }] },
       { key: 'shard_count', label: 'Provisioned Shard Count', type: 'number', defaultValue: 1, group: 'scaling', envConfigurable: true },
@@ -935,7 +907,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Search',
     description: 'Distributed search, vector database, and log analytics suite powered by OpenSearch.',
     terraformResourceType: 'aws_opensearch_domain',
-    emulatorSupportLevel: 'high',
     schema: [
       { key: 'engine_version', label: 'Engine Version', type: 'select', defaultValue: 'OpenSearch_2.15', group: 'general', options: [{ label: 'OpenSearch_2.15', value: 'OpenSearch_2.15' }, { label: 'OpenSearch_2.13', value: 'OpenSearch_2.13' }] },
       { key: 'instance_type', label: 'Data Node Instance Type', type: 'select', defaultValue: 't3.small.search', group: 'scaling', envConfigurable: true, options: [
@@ -964,7 +935,6 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Sparkles',
     description: 'Serverless generative AI foundation models, guardrails, and knowledge base integration.',
     terraformResourceType: 'aws_bedrockagent_agent',
-    emulatorSupportLevel: 'high',
     schema: [
       { key: 'foundation_model', label: 'Foundation Model ID', type: 'select', defaultValue: 'anthropic.claude-3-5-sonnet-20241022-v2:0', group: 'general', envConfigurable: true, options: [
         { label: 'Claude 3.5 Sonnet v2', value: 'anthropic.claude-3-5-sonnet-20241022-v2:0' },

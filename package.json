@@ -20,7 +20,8 @@
     "start": "node dist-server/cli.cjs",
     "preview": "vite preview",
     "test": "vitest run",
-    "validate:golden": "node scripts/validate-golden.mjs"
+    "validate:golden": "node scripts/validate-golden.mjs",
+    "test:emulator": "esbuild scripts/apply-blueprints.ts --bundle --platform=node --format=cjs --target=node18 --outfile=node_modules/.cache/localcloud/apply-blueprints.cjs --log-level=warning && node node_modules/.cache/localcloud/apply-blueprints.cjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.3.5",

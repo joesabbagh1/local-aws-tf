@@ -71,6 +71,8 @@ export function CloudCanvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target)) return;
       const store = useCloudStore.getState();
+      // The canvas is hidden while the cost page is open
+      if (store.view !== 'design') return;
       const mod = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
 
@@ -81,6 +83,11 @@ export function CloudCanvas() {
       } else if (mod && key === 'y') {
         e.preventDefault();
         store.redo();
+      } else if (mod && e.code === 'KeyB') {
+        // ⌘B toggles the service catalog, ⌘⌥B the right panel
+        e.preventDefault();
+        if (e.altKey) store.setDrawerOpen(!store.isDrawerOpen);
+        else store.setCatalogOpen(!store.isCatalogOpen);
       } else if (mod && key === 'd') {
         e.preventDefault();
         if (store.selectedNodeId) store.duplicateNode(store.selectedNodeId);
@@ -131,7 +138,7 @@ export function CloudCanvas() {
       label: edge.data?.label || rel,
       labelStyle: {
         fill: '#9CA1A4',
-        fontSize: 10,
+        fontSize: 11.5,
         fontFamily: '"IBM Plex Mono", monospace',
       },
       labelBgStyle: {
@@ -150,7 +157,7 @@ export function CloudCanvas() {
   return (
     <div ref={reactFlowWrapper} className="flex-1 h-full relative bg-base overflow-hidden">
       {/* Edge legend */}
-      <div className="absolute bottom-[18px] left-14 z-10 pointer-events-none hidden xl:flex items-center gap-4 text-[11px] text-fg-faint">
+      <div className="absolute bottom-[18px] left-14 z-10 pointer-events-none hidden xl:flex items-center gap-4 text-[12.5px] text-fg-faint">
         {EDGE_LEGEND.map(({ rel, label }) => (
           <span key={rel} className="flex items-center gap-1.5">
             <span className="w-3 h-0.5 rounded-full" style={{ backgroundColor: EDGE_COLORS[rel] }} />
@@ -165,8 +172,8 @@ export function CloudCanvas() {
       {nodes.length === 0 && (
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
           <div className="pointer-events-auto max-w-sm text-center">
-            <h2 className="text-[15px] font-medium text-fg">Empty canvas</h2>
-            <p className="text-[13px] text-fg-muted mt-1.5 leading-relaxed">
+            <h2 className="text-[16px] font-medium text-fg">Empty canvas</h2>
+            <p className="text-[14px] text-fg-muted mt-1.5 leading-relaxed">
               Drag a service from the left, or start from a blueprint. Terraform for every environment
               updates as you build.
             </p>

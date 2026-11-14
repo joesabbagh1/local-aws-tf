@@ -17,6 +17,19 @@ export interface EnvironmentProfile {
   instanceSizingMultiplier: number;
   enableHighAvailability: boolean;
   defaultTags: Record<string, string>;
+  /** Traffic and data volumes the cost estimate assumes for this environment. */
+  usage: UsageProfile;
+}
+
+export interface UsageProfile {
+  /** Requests reaching the app per month, in millions. Every request-driven service sees the full volume. */
+  requestsMillions: number;
+  /** Data served to the internet per month, GB. */
+  dataTransferGb: number;
+  /** Data held by each storage service, GB. */
+  storageGb: number;
+  /** Log data ingested per month across all log groups, GB. */
+  logsGb: number;
 }
 
 export type AwsCategory =
@@ -64,7 +77,6 @@ export interface AwsServiceMetadata {
   iconName: string;
   description: string;
   terraformResourceType: string;
-  emulatorSupportLevel: 'full' | 'high' | 'partial';
   isContainer?: boolean;
   defaultWidth?: number;
   defaultHeight?: number;
@@ -85,6 +97,8 @@ export interface CloudNodeData extends Record<string, unknown> {
   notes?: string;
   // Inline code for Lambda functions or EC2 user_data
   inlineCode?: string;
+  /** Lambda only: folder (relative to the project) zipped instead of inlineCode, dependencies included. */
+  sourceDir?: string;
   // Legacy explicit VPC membership; nesting now uses React Flow parentId
   parentVpcId?: string;
   // Live provisioning status per environment
@@ -131,10 +145,24 @@ export interface LintFinding {
   remediation?: string;
 }
 
+/** What a dollar is spent on: capacity that runs by the hour, data at rest, calls, bytes out, flat fees. */
+export type CostDriver = 'compute' | 'storage' | 'requests' | 'transfer' | 'fees';
+
 export interface CostBreakdownItem {
   nodeId: string;
   label: string;
   serviceType: string;
+  category: AwsCategory;
   monthlyUsd: Record<EnvironmentId, number>;
+  drivers: Record<EnvironmentId, Record<CostDriver, number>>;
   sizingNotes: Record<EnvironmentId, string>;
+}
+
+export interface CostSaving {
+  id: string;
+  nodeId: string;
+  envId: EnvironmentId;
+  title: string;
+  detail: string;
+  monthlyUsd: number;
 }

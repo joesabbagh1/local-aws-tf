@@ -1,248 +1,7 @@
-import type {
-  CloudNode,
-  CloudEdge,
-  EnvironmentId,
-  LintFinding,
-  CostBreakdownItem,
-} from '../types/cloud';
+import type { CloudNode, CloudEdge, EnvironmentId, LintFinding } from '../types/cloud';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import { resolveNodeConfigForEnv } from './terraformCompiler';
-
-const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
-
-const EC2_HOURLY_USD: Record<string, number> = {
-  't3.nano': 0.0052,
-  't3.micro': 0.0104,
-  't3.small': 0.0208,
-  't3.medium': 0.0416,
-  't3.large': 0.0832,
-  'm6i.large': 0.096,
-  'm6i.xlarge': 0.192,
-  'c6i.xlarge': 0.17,
-  'c6i.2xlarge': 0.34,
-};
-
-const RDS_HOURLY_USD: Record<string, number> = {
-  'db.t4g.micro': 0.016,
-  'db.t4g.small': 0.032,
-  'db.t4g.medium': 0.065,
-  'db.r6g.large': 0.24,
-  'db.r6g.xlarge': 0.48,
-};
-
-const CACHE_HOURLY_USD: Record<string, number> = {
-  'cache.t4g.micro': 0.016,
-  'cache.t4g.small': 0.032,
-  'cache.t4g.medium': 0.065,
-  'cache.r6g.large': 0.226,
-};
-
-const OPENSEARCH_HOURLY_USD: Record<string, number> = {
-  't3.small.search': 0.036,
-  'm6g.large.search': 0.128,
-  'r6g.xlarge.search': 0.334,
-};
-
-export function estimateArchitectureCosts(nodes: CloudNode[]): {
-  items: CostBreakdownItem[];
-  totalsByEnv: Record<EnvironmentId, number>;
-} {
-  const items: CostBreakdownItem[] = [];
-  const totalsByEnv: Record<EnvironmentId, number> = {
-    dev: 0,
-    testing: 0,
-    staging: 0,
-    prod: 0,
-  };
-
-  for (const node of nodes) {
-    const type = node.data.serviceType;
-    const monthlyUsd: Record<EnvironmentId, number> = {
-      dev: 0,
-      testing: 0,
-      staging: 0,
-      prod: 0,
-    };
-    const sizingNotes: Record<EnvironmentId, string> = {
-      dev: '',
-      testing: '',
-      staging: '',
-      prod: '',
-    };
-
-    for (const envId of ENV_IDS) {
-      if (node.data.envEnabled?.[envId] === false) {
-        monthlyUsd[envId] = 0;
-        sizingNotes[envId] = 'Disabled';
-        continue;
-      }
-
-      const cfg = resolveNodeConfigForEnv(node, envId);
-      let cost = 0;
-      let note = '';
-
-      switch (type) {
-        case 'aws_instance': {
-          const it = cfg.instance_type || 't3.micro';
-          const hourly = EC2_HOURLY_USD[it] || 0.02;
-          const vol = Number(cfg.root_volume_size ?? 20) * 0.08;
-          cost = hourly * 730 + vol;
-          note = `${it} + ${cfg.root_volume_size || 20}GB EBS`;
-          break;
-        }
-        case 'aws_autoscaling_group': {
-          const it = cfg.instance_type || 't3.medium';
-          const count = Number(cfg.desired_capacity ?? 2);
-          const hourly = EC2_HOURLY_USD[it] || 0.0416;
-          cost = hourly * 730 * count;
-          note = `${count}x ${it}`;
-          break;
-        }
-        case 'aws_ecs_service': {
-          const cpuUnits = Number(cfg.cpu ?? 256) / 1024;
-          const memGb = Number(cfg.memory ?? 512) / 1024;
-          const tasks = Number(cfg.desired_count ?? 2);
-          const perTaskMonth = (cpuUnits * 0.04048 + memGb * 0.004445) * 730;
-          cost = perTaskMonth * tasks;
-          note = `${tasks}x (${cfg.cpu} CPU / ${cfg.memory} MiB)`;
-          break;
-        }
-        case 'aws_eks_cluster': {
-          const controlPlane = 73.0;
-          const it = cfg.node_instance_type || 'm6i.large';
-          const nodesCount = Number(cfg.node_desired_size ?? 2);
-          const hourly = EC2_HOURLY_USD[it] || 0.096;
-          cost = controlPlane + hourly * 730 * nodesCount;
-          note = `Control Plane + ${nodesCount}x ${it}`;
-          break;
-        }
-        case 'aws_db_instance': {
-          const ic = cfg.instance_class || 'db.t4g.micro';
-          const hourly = RDS_HOURLY_USD[ic] || 0.032;
-          const multiAzMult = cfg.multi_az ? 2 : 1;
-          const storageCost = Number(cfg.allocated_storage ?? 20) * 0.115 * multiAzMult;
-          cost = hourly * 730 * multiAzMult + storageCost;
-          note = `${ic}${cfg.multi_az ? ' (Multi-AZ)' : ' (Single-AZ)'}`;
-          break;
-        }
-        case 'aws_elasticache_cluster': {
-          const nt = cfg.node_type || 'cache.t4g.micro';
-          const count = Number(cfg.num_cache_nodes ?? 1);
-          const hourly = CACHE_HOURLY_USD[nt] || 0.016;
-          cost = hourly * 730 * count;
-          note = `${count}x ${nt}`;
-          break;
-        }
-        case 'aws_dynamodb_table': {
-          if (cfg.billing_mode === 'PROVISIONED') {
-            const rcu = Number(cfg.read_capacity ?? 5);
-            const wcu = Number(cfg.write_capacity ?? 5);
-            cost = rcu * 0.00013 * 730 + wcu * 0.00065 * 730 + 2.5;
-            note = `Prov (${rcu} RCU / ${wcu} WCU)`;
-          } else {
-            cost = envId === 'prod' ? 18.5 : 3.25;
-            note = 'Pay-per-request';
-          }
-          if (cfg.point_in_time_recovery) cost += 2.0;
-          break;
-        }
-        case 'aws_lambda_function': {
-          const memGb = Number(cfg.memory_size ?? 256) / 1024;
-          const baseReqs = envId === 'prod' ? 2_500_000 : 150_000;
-          cost = (baseReqs / 1_000_000) * 0.2 + memGb * (baseReqs * 0.15) * 0.0000166667;
-          if (Number(cfg.reserved_concurrent_executions) > 0) {
-            cost += Number(cfg.reserved_concurrent_executions) * 0.15;
-          }
-          note = `${cfg.memory_size}MB (${cfg.architectures || 'arm64'})`;
-          break;
-        }
-        case 'aws_lb': {
-          cost = 16.43 + (envId === 'prod' ? 12.0 : 2.5);
-          note = `${cfg.load_balancer_type || 'application'} LB`;
-          break;
-        }
-        case 'aws_nat_gateway': {
-          cost = 32.85 + (envId === 'prod' ? 15.0 : 2.0);
-          note = 'NAT GW + Data Processing';
-          break;
-        }
-        case 'aws_opensearch_domain': {
-          const it = cfg.instance_type || 't3.small.search';
-          const count = Number(cfg.instance_count ?? 1);
-          const hourly = OPENSEARCH_HOURLY_USD[it] || 0.036;
-          const ebs = Number(cfg.ebs_volume_size ?? 20) * 0.1 * count;
-          cost = hourly * 730 * count + ebs;
-          note = `${count}x ${it}`;
-          break;
-        }
-        case 'aws_cloudfront_distribution': {
-          cost = envId === 'prod' ? 24.0 : 2.5;
-          note = cfg.price_class || 'PriceClass_100';
-          break;
-        }
-        case 'aws_apigatewayv2_api': {
-          cost = envId === 'prod' ? 12.0 : 1.0;
-          note = `${cfg.protocol_type || 'HTTP'} API`;
-          break;
-        }
-        case 'aws_s3_bucket': {
-          cost = envId === 'prod' ? 14.5 : 1.2;
-          note = `${cfg.sse_algorithm || 'AES256'}${cfg.versioning_enabled ? ' + Versioning' : ''}`;
-          break;
-        }
-        case 'aws_kms_key': {
-          cost = 1.0;
-          note = 'Customer Master Key';
-          break;
-        }
-        case 'aws_secretsmanager_secret': {
-          cost = 0.4;
-          note = 'Secret Storage';
-          break;
-        }
-        case 'aws_route53_zone': {
-          cost = 0.5;
-          note = 'Hosted Zone';
-          break;
-        }
-        case 'aws_kinesis_stream': {
-          const shards = Number(cfg.shard_count ?? 1);
-          cost =
-            cfg.stream_mode === 'PROVISIONED'
-              ? shards * 0.015 * 730
-              : envId === 'prod'
-              ? 29.0
-              : 7.5;
-          note = cfg.stream_mode === 'PROVISIONED' ? `${shards} Shards` : 'On-Demand';
-          break;
-        }
-        case 'aws_bedrock_agent': {
-          cost = envId === 'prod' ? 45.0 : 5.0;
-          note = String(cfg.foundation_model || '').split('.')[1] || 'Foundation Model';
-          break;
-        }
-        default: {
-          cost = 0;
-          note = 'Free / Included';
-        }
-      }
-
-      monthlyUsd[envId] = Math.round(cost * 100) / 100;
-      sizingNotes[envId] = note;
-      totalsByEnv[envId] = Math.round((totalsByEnv[envId] + monthlyUsd[envId]) * 100) / 100;
-    }
-
-    items.push({
-      nodeId: node.id,
-      label: node.data.label,
-      serviceType: type,
-      monthlyUsd,
-      sizingNotes,
-    });
-  }
-
-  return { items, totalsByEnv };
-}
+import { emulatorSupport } from './emulatorSupport';
 
 export function runArchitectureLinter(
   nodes: CloudNode[],
@@ -372,17 +131,19 @@ export function runArchitectureLinter(
       });
     }
 
-    // 7. AWS Emulator Fidelity Note for high-complexity services
+    // 7. Services the emulator test run found failing (npm run test:emulator)
     const svc = SERVICE_BY_TYPE[type];
-    if (svc?.emulatorSupportLevel === 'high') {
+    const support = emulatorSupport(svc);
+    if (support.level === 'fails') {
       findings.push({
-        id: `emulator-fidelity-${node.id}`,
-        severity: 'info',
+        id: `emulator-support-${node.id}`,
+        severity: 'warning',
         category: 'Emulator',
-        title: `${svc.shortName} Control Plane Emulation Note`,
-        description: `aws-emulator emulates ${svc.name} control-plane APIs locally with zero AWS cost. Remember that aws-emulator does not enforce IAM policy evaluation during local test runs.`,
+        title: `${svc.shortName} failed on the emulator in tests`,
+        description: support.errors[0] || 'It did not apply cleanly in the last emulator test run.',
         nodeId: node.id,
         envId: activeEnv,
+        remediation: 'Expect apply to fail locally for this resource. The AWS export is not affected.',
       });
     }
   }

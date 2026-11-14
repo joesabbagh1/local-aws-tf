@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useCloudStore } from '../store/useCloudStore';
-import { estimateArchitectureCosts, runArchitectureLinter } from '../utils/architectureValidator';
+import { runArchitectureLinter } from '../utils/architectureValidator';
+import { estimateArchitectureCosts } from '../utils/costEstimator';
 import type { EnvironmentId, LintFinding } from '../types/cloud';
 import { AlertOctagon, AlertTriangle, Info, CheckCircle2 } from 'lucide-react';
-import { EnvDot, Section, Segmented, cn } from './ui';
+import { Button, EnvDot, Section, Segmented, cn } from './ui';
 
 const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 
@@ -23,11 +24,12 @@ export function ArchitectureAuditPanel() {
   const environments = useCloudStore((s) => s.environments);
   const selectNode = useCloudStore((s) => s.selectNode);
   const setRightTab = useCloudStore((s) => s.setRightTab);
+  const setView = useCloudStore((s) => s.setView);
 
   const [severityFilter, setSeverityFilter] = useState<'all' | LintFinding['severity']>('all');
 
   const findings = useMemo(() => runArchitectureLinter(nodes, edges, activeEnv), [nodes, edges, activeEnv]);
-  const costs = useMemo(() => estimateArchitectureCosts(nodes), [nodes]);
+  const costs = useMemo(() => estimateArchitectureCosts(nodes, environments), [nodes, environments]);
 
   const counts = {
     error: findings.filter((f) => f.severity === 'error').length,
@@ -46,7 +48,11 @@ export function ArchitectureAuditPanel() {
       {/* Cost by environment */}
       <Section
         title="Estimated monthly cost"
-        aside={<span className="text-[11px] text-fg-faint">on-demand, us-east-1 list prices</span>}
+        aside={
+          <Button variant="ghost" className="-mr-2" onClick={() => setView('costs')}>
+            Open cost analysis
+          </Button>
+        }
       >
         <div className="space-y-2">
           {ENV_IDS.map((id) => {
@@ -84,7 +90,7 @@ export function ArchitectureAuditPanel() {
               >
                 <div className="min-w-0">
                   <div className="text-xs text-fg truncate">{item.label}</div>
-                  <div className="text-[11px] text-fg-faint truncate">{item.sizingNotes[activeEnv]}</div>
+                  <div className="text-[12.5px] text-fg-faint truncate">{item.sizingNotes[activeEnv]}</div>
                 </div>
                 <span className="text-xs font-mono text-fg-muted shrink-0 tabular-nums">
                   {usd(item.monthlyUsd[activeEnv])}
@@ -136,7 +142,7 @@ export function ArchitectureAuditPanel() {
                   <div className="space-y-1 min-w-0">
                     <div className="flex items-baseline gap-2">
                       <span className="text-xs font-medium text-fg">{f.title}</span>
-                      <span className="text-[11px] text-fg-faint">{f.category}</span>
+                      <span className="text-[12.5px] text-fg-faint">{f.category}</span>
                     </div>
                     <p className="text-xs text-fg-muted leading-relaxed">{f.description}</p>
                     {f.remediation && (

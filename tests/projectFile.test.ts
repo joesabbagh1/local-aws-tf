@@ -5,7 +5,7 @@ import { toProjectFile, withRuntimeStateFrom } from '../src/utils/projectFile';
 import type { CloudNode } from '../src/types/cloud';
 
 const tpl = ARCHITECTURE_TEMPLATES[0];
-const base = { edges: tpl.edges, environments: DEFAULT_ENVIRONMENTS, targetLocalEmulator: true };
+const base = { edges: tpl.edges, environments: DEFAULT_ENVIRONMENTS };
 
 describe('project file', () => {
   it('leaves out selection, drag, measurement and provisioning state', () => {

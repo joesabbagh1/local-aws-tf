@@ -31,7 +31,6 @@ export function RunnerConsole() {
   const runTerraformCommand = useCloudStore((s) => s.runTerraformCommand);
   const requestApply = useCloudStore((s) => s.requestApply);
   const clearTerminalLogs = useCloudStore((s) => s.clearTerminalLogs);
-  const targetLocalEmulator = useCloudStore((s) => s.targetLocalEmulator);
 
   const env = environments[activeEnv];
   const online = emulatorStatuses[env.emulatorPort]?.running;
@@ -58,11 +57,11 @@ export function RunnerConsole() {
       {/* Emulator container for the active environment */}
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[13px] text-fg flex items-center gap-2">
+          <div className="text-[14px] text-fg flex items-center gap-2">
             <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', online ? 'bg-ok' : 'bg-fg-faint/60')} />
             {env.name} emulator
           </div>
-          <div className="text-[11px] font-mono text-fg-faint mt-0.5 pl-3.5">
+          <div className="text-[12.5px] font-mono text-fg-faint mt-0.5 pl-3.5">
             127.0.0.1:{env.emulatorPort} · {online ? 'running' : 'stopped'}
           </div>
         </div>
@@ -82,13 +81,6 @@ export function RunnerConsole() {
           </Button>
         )}
       </div>
-
-      {!targetLocalEmulator && (
-        <p className="text-[11px] text-warn">
-          The provider targets real AWS ({env.region}). Switch the target in the top bar back to the
-          emulator before applying locally.
-        </p>
-      )}
 
       {/* Terraform lifecycle */}
       <div className="flex rounded-md border border-line overflow-hidden divide-x divide-line">
@@ -113,7 +105,7 @@ export function RunnerConsole() {
       {/* Live terminal */}
       <div className="rounded-md border border-line bg-base overflow-hidden">
         <div className="h-8 pl-3 pr-1 border-b border-line flex items-center justify-between">
-          <span className="text-[11px] font-mono text-fg-faint flex items-center gap-1.5">
+          <span className="text-[12.5px] font-mono text-fg-faint flex items-center gap-1.5">
             {isRunningCommand && <Loader2 className="w-3 h-3 animate-spin text-warn" />}
             terraform-out/environments/{activeEnv}
           </span>
@@ -123,7 +115,7 @@ export function RunnerConsole() {
         </div>
         <div
           ref={terminalRef}
-          className="h-72 overflow-y-auto p-3 font-mono text-[11px] leading-relaxed select-text"
+          className="h-72 overflow-y-auto p-3 font-mono text-[12.5px] leading-relaxed select-text"
         >
           {terminalLogs.length === 0 ? (
             <span className="text-fg-faint">No output yet.</span>

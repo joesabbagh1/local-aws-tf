@@ -1,0 +1,896 @@
+{
+  "generatedAt": "2026-11-13T23:37:41.397Z",
+  "terraformVersion": "1.10.5",
+  "emulatorImageCreated": "2026-11-13T21:02:50.109036177Z",
+  "byType": {
+    "aws_bedrockagent_agent": {
+      "status": "fails",
+      "applied": 0,
+      "failed": 1,
+      "errors": [
+        "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
+      ]
+    },
+    "aws_iam_role": {
+      "status": "verified",
+      "applied": 11,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_iam_role_policy": {
+      "status": "verified",
+      "applied": 8,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_kinesis_stream": {
+      "status": "fails",
+      "applied": 0,
+      "failed": 1,
+      "errors": [
+        "increasing Kinesis Stream (lc-dev-telemetry_ingest_stream) retention period: operation error Kinesis: IncreaseStreamRetentionPeriod, https response error StatusCode: 400, RequestID: , InvalidArgumentException: Requested retention period (24 hours) for stream lc-dev-telemetry_ingest_stream can not be shorter than existing retention period (24 hours). Use DecreaseRetentionPeriod API."
+      ]
+    },
+    "aws_lambda_event_source_mapping": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_lambda_function": {
+      "status": "verified",
+      "applied": 5,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_opensearch_domain": {
+      "status": "verified",
+      "applied": 1,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_sfn_state_machine": {
+      "status": "verified",
+      "applied": 1,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_autoscaling_group": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_cloudwatch_event_bus": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_cloudwatch_event_rule": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_cloudwatch_log_group": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_ecr_repository": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_efs_file_system": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_eip": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_eks_cluster": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_internet_gateway": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_kms_alias": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_kms_key": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_launch_template": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_nat_gateway": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_route53_zone": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_route_table": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_security_group": {
+      "status": "fails",
+      "applied": 0,
+      "failed": 2,
+      "errors": [
+        "revoking default IPv4 egress rule for Security Group (sg-0000000000000008f): operation error EC2: RevokeSecurityGroupEgress, https response error StatusCode: 400, RequestID: 00000000-0000-0000-0000-000000000001, api error InvalidPermission.NotFound: The specified rule does not exist in this security group.",
+        "revoking default IPv4 egress rule for Security Group (sg-0000000000000009e): operation error EC2: RevokeSecurityGroupEgress, https response error StatusCode: 400, RequestID: 00000000-0000-0000-0000-000000000001, api error InvalidPermission.NotFound: The specified rule does not exist in this security group."
+      ]
+    },
+    "aws_sns_topic": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_ssm_parameter": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_subnet": {
+      "status": "verified",
+      "applied": 4,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_vpc": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_apigatewayv2_api": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_apigatewayv2_integration": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_apigatewayv2_route": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_apigatewayv2_stage": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_cloudfront_distribution": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_cognito_user_pool": {
+      "status": "fails",
+      "applied": 1,
+      "failed": 1,
+      "errors": [
+        "setting Cognito User Pool (us-west-2_e29c98e09) MFA configuration: operation error Cognito Identity Provider: SetUserPoolMfaConfig, https response error StatusCode: 400, RequestID: 008bc169-fda7-4da3-b173-eb3828d96095, InvalidParameterException: Invalid MFA Configuration given. SMS MFA, Email MFA, or Software Token MFA must be enabled."
+      ]
+    },
+    "aws_cognito_user_pool_client": {
+      "status": "verified",
+      "applied": 1,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_dynamodb_table": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_lambda_permission": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket_lifecycle_configuration": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket_public_access_block": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket_server_side_encryption_configuration": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket_versioning": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_sqs_queue": {
+      "status": "verified",
+      "applied": 4,
+      "failed": 0,
+      "errors": []
+    }
+  },
+  "runs": [
+    {
+      "canvas": "ai-streaming-rag",
+      "envId": "dev",
+      "ok": false,
+      "durationSeconds": 1263,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_bedrockagent_agent.bedrock_reasoning_agent",
+          "type": "aws_bedrockagent_agent",
+          "applied": false,
+          "error": "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
+        },
+        {
+          "address": "aws_iam_role.bedrock_reasoning_agent_agent_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.embedding_processor_fn_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.rag_orchestrator_sfn_sfn_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.embedding_processor_fn_consume_telemetry_ingest_stream",
+          "type": "aws_iam_role_policy",
+          "applied": false
+        },
+        {
+          "address": "aws_kinesis_stream.telemetry_ingest_stream",
+          "type": "aws_kinesis_stream",
+          "applied": false,
+          "error": "increasing Kinesis Stream (lc-dev-telemetry_ingest_stream) retention period: operation error Kinesis: IncreaseStreamRetentionPeriod, https response error StatusCode: 400, RequestID: , InvalidArgumentException: Requested retention period (24 hours) for stream lc-dev-telemetry_ingest_stream can not be shorter than existing retention period (24 hours). Use DecreaseRetentionPeriod API."
+        },
+        {
+          "address": "aws_lambda_event_source_mapping.telemetry_ingest_stream_stream_embedding_processor_fn",
+          "type": "aws_lambda_event_source_mapping",
+          "applied": false
+        },
+        {
+          "address": "aws_lambda_function.embedding_processor_fn",
+          "type": "aws_lambda_function",
+          "applied": true
+        },
+        {
+          "address": "aws_opensearch_domain.vector_knowledge_index",
+          "type": "aws_opensearch_domain",
+          "applied": true
+        },
+        {
+          "address": "aws_sfn_state_machine.rag_orchestrator_sfn",
+          "type": "aws_sfn_state_machine",
+          "applied": true
+        }
+      ]
+    },
+    {
+      "canvas": "ai-streaming-rag",
+      "envId": "prod",
+      "ok": false,
+      "durationSeconds": 0,
+      "generalErrors": [
+        "Command failed: terraform plan -var-file=prod.tfvars -out=tfplan -input=false -no-color"
+      ],
+      "resources": []
+    },
+    {
+      "canvas": "catalog-coverage",
+      "envId": "dev",
+      "ok": false,
+      "durationSeconds": 101,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_autoscaling_group.cov_autoscaling_group",
+          "type": "aws_autoscaling_group",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_bus.cov_cloudwatch_event_bus",
+          "type": "aws_cloudwatch_event_bus",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_rule.cov_cloudwatch_event_bus_rule",
+          "type": "aws_cloudwatch_event_rule",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_log_group.cov_cloudwatch_log_group",
+          "type": "aws_cloudwatch_log_group",
+          "applied": true
+        },
+        {
+          "address": "aws_ecr_repository.cov_ecr_repository",
+          "type": "aws_ecr_repository",
+          "applied": true
+        },
+        {
+          "address": "aws_efs_file_system.cov_efs_file_system",
+          "type": "aws_efs_file_system",
+          "applied": true
+        },
+        {
+          "address": "aws_eip.cov_nat_gateway_eip",
+          "type": "aws_eip",
+          "applied": true
+        },
+        {
+          "address": "aws_eks_cluster.cov_eks_cluster",
+          "type": "aws_eks_cluster",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.cov_eks_cluster_eks_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.cov_iam_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_instance.cov_instance",
+          "type": "aws_instance",
+          "applied": false
+        },
+        {
+          "address": "aws_internet_gateway.cov_internet_gateway",
+          "type": "aws_internet_gateway",
+          "applied": true
+        },
+        {
+          "address": "aws_kms_alias.cov_kms_key_alias",
+          "type": "aws_kms_alias",
+          "applied": true
+        },
+        {
+          "address": "aws_kms_key.cov_kms_key",
+          "type": "aws_kms_key",
+          "applied": true
+        },
+        {
+          "address": "aws_launch_template.cov_autoscaling_group_lt",
+          "type": "aws_launch_template",
+          "applied": true
+        },
+        {
+          "address": "aws_nat_gateway.cov_nat_gateway",
+          "type": "aws_nat_gateway",
+          "applied": true
+        },
+        {
+          "address": "aws_route53_zone.cov_route53_zone",
+          "type": "aws_route53_zone",
+          "applied": true
+        },
+        {
+          "address": "aws_route_table.cov_route_table",
+          "type": "aws_route_table",
+          "applied": true
+        },
+        {
+          "address": "aws_security_group.cov_security_group",
+          "type": "aws_security_group",
+          "applied": false,
+          "error": "revoking default IPv4 egress rule for Security Group (sg-0000000000000008f): operation error EC2: RevokeSecurityGroupEgress, https response error StatusCode: 400, RequestID: 00000000-0000-0000-0000-000000000001, api error InvalidPermission.NotFound: The specified rule does not exist in this security group."
+        },
+        {
+          "address": "aws_sns_topic.cov_sns_topic",
+          "type": "aws_sns_topic",
+          "applied": true
+        },
+        {
+          "address": "aws_ssm_parameter.cov_ssm_parameter",
+          "type": "aws_ssm_parameter",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.cov_subnet_a",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.cov_subnet_b",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_vpc.cov_vpc",
+          "type": "aws_vpc",
+          "applied": true
+        }
+      ]
+    },
+    {
+      "canvas": "catalog-coverage",
+      "envId": "prod",
+      "ok": false,
+      "durationSeconds": 74,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_autoscaling_group.cov_autoscaling_group",
+          "type": "aws_autoscaling_group",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_bus.cov_cloudwatch_event_bus",
+          "type": "aws_cloudwatch_event_bus",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_rule.cov_cloudwatch_event_bus_rule",
+          "type": "aws_cloudwatch_event_rule",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_log_group.cov_cloudwatch_log_group",
+          "type": "aws_cloudwatch_log_group",
+          "applied": true
+        },
+        {
+          "address": "aws_ecr_repository.cov_ecr_repository",
+          "type": "aws_ecr_repository",
+          "applied": true
+        },
+        {
+          "address": "aws_efs_file_system.cov_efs_file_system",
+          "type": "aws_efs_file_system",
+          "applied": true
+        },
+        {
+          "address": "aws_eip.cov_nat_gateway_eip",
+          "type": "aws_eip",
+          "applied": true
+        },
+        {
+          "address": "aws_eks_cluster.cov_eks_cluster",
+          "type": "aws_eks_cluster",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.cov_eks_cluster_eks_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.cov_iam_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_instance.cov_instance",
+          "type": "aws_instance",
+          "applied": false
+        },
+        {
+          "address": "aws_internet_gateway.cov_internet_gateway",
+          "type": "aws_internet_gateway",
+          "applied": true
+        },
+        {
+          "address": "aws_kms_alias.cov_kms_key_alias",
+          "type": "aws_kms_alias",
+          "applied": true
+        },
+        {
+          "address": "aws_kms_key.cov_kms_key",
+          "type": "aws_kms_key",
+          "applied": true
+        },
+        {
+          "address": "aws_launch_template.cov_autoscaling_group_lt",
+          "type": "aws_launch_template",
+          "applied": true
+        },
+        {
+          "address": "aws_nat_gateway.cov_nat_gateway",
+          "type": "aws_nat_gateway",
+          "applied": true
+        },
+        {
+          "address": "aws_route53_zone.cov_route53_zone",
+          "type": "aws_route53_zone",
+          "applied": true
+        },
+        {
+          "address": "aws_route_table.cov_route_table",
+          "type": "aws_route_table",
+          "applied": true
+        },
+        {
+          "address": "aws_security_group.cov_security_group",
+          "type": "aws_security_group",
+          "applied": false,
+          "error": "revoking default IPv4 egress rule for Security Group (sg-0000000000000009e): operation error EC2: RevokeSecurityGroupEgress, https response error StatusCode: 400, RequestID: 00000000-0000-0000-0000-000000000001, api error InvalidPermission.NotFound: The specified rule does not exist in this security group."
+        },
+        {
+          "address": "aws_sns_topic.cov_sns_topic",
+          "type": "aws_sns_topic",
+          "applied": true
+        },
+        {
+          "address": "aws_ssm_parameter.cov_ssm_parameter",
+          "type": "aws_ssm_parameter",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.cov_subnet_a",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.cov_subnet_b",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_vpc.cov_vpc",
+          "type": "aws_vpc",
+          "applied": true
+        }
+      ]
+    },
+    {
+      "canvas": "serverless-ecommerce",
+      "envId": "dev",
+      "ok": true,
+      "durationSeconds": 133,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_apigatewayv2_api.core_commerce_api",
+          "type": "aws_apigatewayv2_api",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_integration.core_commerce_api_to_orders_api_handler",
+          "type": "aws_apigatewayv2_integration",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_route.core_commerce_api_route_orders_api_handler",
+          "type": "aws_apigatewayv2_route",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_stage.core_commerce_api_stage",
+          "type": "aws_apigatewayv2_stage",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudfront_distribution.global_edge_cdn",
+          "type": "aws_cloudfront_distribution",
+          "applied": true
+        },
+        {
+          "address": "aws_cognito_user_pool.customer_identity_pool",
+          "type": "aws_cognito_user_pool",
+          "applied": true
+        },
+        {
+          "address": "aws_cognito_user_pool_client.customer_identity_pool_client",
+          "type": "aws_cognito_user_pool_client",
+          "applied": true
+        },
+        {
+          "address": "aws_dynamodb_table.orders_table",
+          "type": "aws_dynamodb_table",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.fulfillment_worker_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.orders_api_handler_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.fulfillment_worker_consume_order_fulfillment_queue",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.fulfillment_worker_s3_invoices_media_bucket",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.orders_api_handler_ddb_orders_table",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.orders_api_handler_sqs_order_fulfillment_queue",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_event_source_mapping.order_fulfillment_queue_trigger_fulfillment_worker",
+          "type": "aws_lambda_event_source_mapping",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function.fulfillment_worker",
+          "type": "aws_lambda_function",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function.orders_api_handler",
+          "type": "aws_lambda_function",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.core_commerce_api_invoke_orders_api_handler",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket.invoices_media_bucket",
+          "type": "aws_s3_bucket",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_lifecycle_configuration.invoices_media_bucket_lifecycle",
+          "type": "aws_s3_bucket_lifecycle_configuration",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_public_access_block.invoices_media_bucket_pab",
+          "type": "aws_s3_bucket_public_access_block",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_server_side_encryption_configuration.invoices_media_bucket_sse",
+          "type": "aws_s3_bucket_server_side_encryption_configuration",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_versioning.invoices_media_bucket_versioning",
+          "type": "aws_s3_bucket_versioning",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.order_fulfillment_queue",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.order_fulfillment_queue_dlq",
+          "type": "aws_sqs_queue",
+          "applied": true
+        }
+      ]
+    },
+    {
+      "canvas": "serverless-ecommerce",
+      "envId": "prod",
+      "ok": false,
+      "durationSeconds": 131,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_apigatewayv2_api.core_commerce_api",
+          "type": "aws_apigatewayv2_api",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_integration.core_commerce_api_to_orders_api_handler",
+          "type": "aws_apigatewayv2_integration",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_route.core_commerce_api_route_orders_api_handler",
+          "type": "aws_apigatewayv2_route",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_stage.core_commerce_api_stage",
+          "type": "aws_apigatewayv2_stage",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudfront_distribution.global_edge_cdn",
+          "type": "aws_cloudfront_distribution",
+          "applied": true
+        },
+        {
+          "address": "aws_cognito_user_pool.customer_identity_pool",
+          "type": "aws_cognito_user_pool",
+          "applied": false,
+          "error": "setting Cognito User Pool (us-west-2_e29c98e09) MFA configuration: operation error Cognito Identity Provider: SetUserPoolMfaConfig, https response error StatusCode: 400, RequestID: 008bc169-fda7-4da3-b173-eb3828d96095, InvalidParameterException: Invalid MFA Configuration given. SMS MFA, Email MFA, or Software Token MFA must be enabled."
+        },
+        {
+          "address": "aws_cognito_user_pool_client.customer_identity_pool_client",
+          "type": "aws_cognito_user_pool_client",
+          "applied": false
+        },
+        {
+          "address": "aws_dynamodb_table.orders_table",
+          "type": "aws_dynamodb_table",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.fulfillment_worker_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.orders_api_handler_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.fulfillment_worker_consume_order_fulfillment_queue",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.fulfillment_worker_s3_invoices_media_bucket",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.orders_api_handler_ddb_orders_table",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.orders_api_handler_sqs_order_fulfillment_queue",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_event_source_mapping.order_fulfillment_queue_trigger_fulfillment_worker",
+          "type": "aws_lambda_event_source_mapping",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function.fulfillment_worker",
+          "type": "aws_lambda_function",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function.orders_api_handler",
+          "type": "aws_lambda_function",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.core_commerce_api_invoke_orders_api_handler",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket.invoices_media_bucket",
+          "type": "aws_s3_bucket",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_lifecycle_configuration.invoices_media_bucket_lifecycle",
+          "type": "aws_s3_bucket_lifecycle_configuration",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_public_access_block.invoices_media_bucket_pab",
+          "type": "aws_s3_bucket_public_access_block",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_server_side_encryption_configuration.invoices_media_bucket_sse",
+          "type": "aws_s3_bucket_server_side_encryption_configuration",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_versioning.invoices_media_bucket_versioning",
+          "type": "aws_s3_bucket_versioning",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.order_fulfillment_queue",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.order_fulfillment_queue_dlq",
+          "type": "aws_sqs_queue",
+          "applied": true
+        }
+      ]
+    },
+    {
+      "canvas": "vpc-ecs-rds-ha",
+      "envId": "dev",
+      "ok": false,
+      "durationSeconds": 0,
+      "generalErrors": [
+        "plan failed: only alphanumeric characters and hyphens allowed in \"name\": \"lc-dev-public_ingress_alb\" (aws_lb.public_ingress_alb,) | only alphanumeric characters and hyphens allowed in \"name\" (aws_lb_target_group.public_ingress_alb_tg,) | only lowercase alphanumeric characters and hyphens allowed in \"identifier\" (aws_db_instance.primary_postgres_db,) | invalid value for cluster_id (must contain only lowercase alphanumeric characters and hyphens) (aws_elasticache_cluster.session_redis_cache,)"
+      ],
+      "resources": []
+    },
+    {
+      "canvas": "vpc-ecs-rds-ha",
+      "envId": "prod",
+      "ok": false,
+      "durationSeconds": 0,
+      "generalErrors": [
+        "Command failed: terraform plan -var-file=prod.tfvars -out=tfplan -input=false -no-color"
+      ],
+      "resources": []
+    }
+  ]
+}

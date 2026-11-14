@@ -1,0 +1,8 @@
+# State settings for Testing / QA (testing). Fill in once; LocalCloud never overwrites this file.
+# The bucket must exist before `terraform init` and should have versioning enabled.
+
+bucket       = "CHANGE-ME-terraform-state"
+key          = "localcloud/testing/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

@@ -12,8 +12,9 @@ import {
   RefreshCw,
   LayoutTemplate,
   FileInput,
+  FileOutput,
 } from 'lucide-react';
-import { Button, IconButton, EnvDot, cn } from './ui';
+import { Button, IconButton, EnvDot, Segmented, cn } from './ui';
 import { planHasChanges } from '../utils/planSummary';
 
 const ENV_ORDER: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
@@ -22,19 +23,21 @@ export function TopNavBar() {
   const activeEnv = useCloudStore((s) => s.activeEnv);
   const environments = useCloudStore((s) => s.environments);
   const setActiveEnv = useCloudStore((s) => s.setActiveEnv);
-  const targetLocalEmulator = useCloudStore((s) => s.targetLocalEmulator);
-  const setTargetLocalEmulator = useCloudStore((s) => s.setTargetLocalEmulator);
   const nodes = useCloudStore((s) => s.nodes);
+  const view = useCloudStore((s) => s.view);
+  const setView = useCloudStore((s) => s.setView);
   const autoLayoutCanvas = useCloudStore((s) => s.autoLayoutCanvas);
   const clearCanvas = useCloudStore((s) => s.clearCanvas);
   const setTemplateModalOpen = useCloudStore((s) => s.setTemplateModalOpen);
   const setImportModalOpen = useCloudStore((s) => s.setImportModalOpen);
+  const setExportModalOpen = useCloudStore((s) => s.setExportModalOpen);
   const setRightTab = useCloudStore((s) => s.setRightTab);
   const emulatorStatuses = useCloudStore((s) => s.emulatorStatuses);
   const refreshEmulatorStatuses = useCloudStore((s) => s.refreshEmulatorStatuses);
   const syncTerraformToDisk = useCloudStore((s) => s.syncTerraformToDisk);
   const requestApply = useCloudStore((s) => s.requestApply);
   const loadProjectFromDisk = useCloudStore((s) => s.loadProjectFromDisk);
+  const syncStatusFromState = useCloudStore((s) => s.syncStatusFromState);
   const isRunningCommand = useCloudStore((s) => s.isRunningCommand);
   const runningCommand = useCloudStore((s) => s.runningCommand);
   const projectFile = useCloudStore((s) => s.projectFile);
@@ -51,7 +54,11 @@ export function TopNavBar() {
   useEffect(() => {
     refreshEmulatorStatuses();
     // The project file on disk wins over browser storage; then write its Terraform to ./terraform-out
-    loadProjectFromDisk().finally(() => syncTerraformToDisk());
+    // and read what each environment actually has from its Terraform state
+    loadProjectFromDisk().finally(() => {
+      syncTerraformToDisk();
+      syncStatusFromState();
+    });
     const timer = setInterval(refreshEmulatorStatuses, 6000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -82,8 +89,8 @@ export function TopNavBar() {
         <div className="w-5 h-5 rounded-[5px] bg-accent flex items-center justify-center">
           <span className="w-2 h-2 rounded-[2px] bg-accent-ink" />
         </div>
-        <span className="text-[13px] font-semibold tracking-tight text-fg">LocalCloud</span>
-        <span className="text-[13px] text-fg-faint">Studio</span>
+        <span className="text-[14px] font-semibold tracking-tight text-fg">LocalCloud</span>
+        <span className="text-[14px] text-fg-faint">Studio</span>
       </div>
 
       {/* Environment switcher */}
@@ -103,7 +110,7 @@ export function TopNavBar() {
                 portOnline ? 'running' : 'stopped'
               }`}
               className={cn(
-                'relative h-full px-3 flex items-center gap-2 text-[13px] transition-colors',
+                'relative h-full px-3 flex items-center gap-2 text-[14px] transition-colors',
                 isActive ? 'text-fg' : 'text-fg-muted hover:text-fg'
               )}
             >
@@ -115,12 +122,23 @@ export function TopNavBar() {
         })}
       </nav>
 
+      <span className="w-px h-5 bg-line" />
+
+      <Segmented
+        value={view}
+        onChange={setView}
+        options={[
+          { value: 'design', label: 'Design' },
+          { value: 'costs', label: 'Costs' },
+        ]}
+      />
+
       <div className="flex-1" />
 
       {/* Where the canvas is saved */}
       {projectFile.file && (
         <span
-          className="hidden xl:flex items-center gap-1.5 text-[11px] font-mono text-fg-faint"
+          className="hidden xl:flex items-center gap-1.5 text-[12.5px] font-mono text-fg-faint"
           title={
             projectFile.state === 'error'
               ? `Could not save ./${projectFile.file}: ${projectFile.error}`
@@ -168,21 +186,27 @@ export function TopNavBar() {
           <FileInput className="w-3.5 h-3.5" />
           <span className="hidden lg:inline">Import</span>
         </Button>
+        <Button
+          variant="ghost"
+          onClick={() => setExportModalOpen(true)}
+          title="Write Terraform for your real AWS accounts to ./terraform-aws"
+        >
+          <FileOutput className="w-3.5 h-3.5" />
+          <span className="hidden lg:inline">Export for AWS</span>
+        </Button>
       </div>
 
       <span className="w-px h-5 bg-line" />
 
       <div className="flex items-center gap-2">
-        {/* Provider target: local emulator or real AWS */}
-        <button
-          type="button"
-          onClick={() => setTargetLocalEmulator(!targetLocalEmulator)}
-          title="Switch the Terraform provider between the local emulator and real AWS"
-          className="h-7 px-2.5 rounded-md text-xs font-mono text-fg-muted hover:text-fg hover:bg-raised flex items-center gap-1.5 transition-colors"
+        {/* Everything the app runs goes to this environment's local emulator */}
+        <span
+          className="h-7 px-1 text-xs font-mono text-fg-muted flex items-center gap-1.5"
+          title={`Plan and apply run against the ${activeEnv} emulator. Use Export for AWS to deploy for real.`}
         >
-          <span className="font-sans text-fg-faint">target</span>
-          {targetLocalEmulator ? `127.0.0.1:${currentEnvProfile.emulatorPort}` : `aws ${currentEnvProfile.region}`}
-        </button>
+          <span className="font-sans text-fg-faint">emulator</span>
+          127.0.0.1:{currentEnvProfile.emulatorPort}
+        </span>
 
         <Button onClick={handleExportAllEnvsToDisk} title="Write Terraform for every environment to ./terraform-out">
           {exportStatus === 'saved' ? (

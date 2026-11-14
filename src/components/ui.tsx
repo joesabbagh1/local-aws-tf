@@ -28,7 +28,7 @@ export function Button({
       className={cn(
         'inline-flex items-center justify-center gap-1.5 rounded-md whitespace-nowrap transition-colors',
         'disabled:opacity-40 disabled:pointer-events-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent',
-        size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-[13px]',
+        size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-[14px]',
         BUTTON_VARIANTS[variant],
         className
       )}
@@ -178,6 +178,6 @@ export function ServiceGlyph({
 
 export function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="font-mono text-[10px] px-1 py-px rounded border border-line text-fg-muted">{children}</kbd>
+    <kbd className="font-mono text-[11.5px] px-1 py-px rounded border border-line text-fg-muted">{children}</kbd>
   );
 }

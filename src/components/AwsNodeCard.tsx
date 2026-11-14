@@ -75,8 +75,8 @@ export const AwsNodeCard = memo(({ id, data, selected }: NodeProps<CloudNode>) =
       <div className="flex items-center gap-2.5 px-3 pt-3 pb-2.5">
         <ServiceGlyph iconName={svc?.iconName || 'Server'} color={svc?.color || '#9CA1A4'} />
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium text-fg truncate leading-tight">{data.label}</div>
-          <div className="text-[11px] text-fg-faint truncate mt-0.5">
+          <div className="text-[14px] font-medium text-fg truncate leading-tight">{data.label}</div>
+          <div className="text-[12.5px] text-fg-faint truncate mt-0.5">
             {svc?.shortName || 'AWS'}
             <span className="mx-1">·</span>
             <span className="font-mono">{data.resourceName}</span>
@@ -134,7 +134,7 @@ export const AwsNodeCard = memo(({ id, data, selected }: NodeProps<CloudNode>) =
               typeof val === 'boolean' ? String(val) : val === undefined || val === '' ? '—' : String(val);
 
             return (
-              <div key={field.key} className="flex items-baseline justify-between gap-3 font-mono text-[11px]">
+              <div key={field.key} className="flex items-baseline justify-between gap-3 font-mono text-[12.5px]">
                 <dt className="text-fg-faint truncate shrink-0 max-w-[45%]">{field.key}</dt>
                 <dd
                   title={isOverridden ? `Overridden in ${activeEnv}` : undefined}
@@ -161,7 +161,7 @@ export const AwsNodeCard = memo(({ id, data, selected }: NodeProps<CloudNode>) =
           ))}
         </div>
 
-        <span className="text-[11px] flex items-center gap-1.5">
+        <span className="text-[12.5px] flex items-center gap-1.5">
           {!isEnabledInActiveEnv ? (
             <span className="text-fg-faint">skipped in {activeEnv}</span>
           ) : plannedAction && !isBusy ? (

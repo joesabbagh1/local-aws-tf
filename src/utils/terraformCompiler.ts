@@ -73,13 +73,54 @@ export function injectExtraHcl(blocks: string, tfType: string, resName: string, 
   return `${blocks.slice(0, closeIdx).replace(/\s+$/, '')}\n\n  # Extra arguments (hand-written)\n${indented}\n${blocks.slice(closeIdx)}`;
 }
 
+/**
+ * Where the Terraform is meant to run. `emulator` is what LocalCloud plans and applies locally;
+ * `aws` is the export for real accounts: no emulator endpoints, S3 remote state, and real values
+ * (variables or lookups) wherever the emulator build uses placeholders.
+ */
+export type CompileTarget = 'emulator' | 'aws';
+
+/**
+ * Name expression for resources whose AWS names allow only lowercase letters, digits and hyphens
+ * (load balancers, target groups, S3 buckets, RDS, ElastiCache, OpenSearch). Underscores become
+ * hyphens and the name is cut to the service's limit without leaving a trailing hyphen.
+ */
+function dnsSafeName(base: string, maxLength: number): string {
+  const slug = base.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return `trimsuffix(substr("\${local.name_prefix}-${slug}", 0, ${maxLength}), "-")`;
+}
+
+/** Placeholder AMI the catalog ships as a default; on AWS it is swapped for the latest Amazon Linux 2023. */
+const PLACEHOLDER_AMI = 'ami-0c55b159cbfafe1f0';
+
+/** Tags that only mean something on the emulator. */
+const EMULATOR_ONLY_TAGS = new Set(['EmulatorPort']);
+
+/** Graviton instance families (t4g, m7g, c6gn, r7gd…) need the arm64 image. */
+function amiArchForInstanceType(instanceType: string): 'x86_64' | 'arm64' {
+  const suffix = instanceType.match(/^[a-z]+\d+([a-z-]*)\./)?.[1] || '';
+  return suffix.includes('g') ? 'arm64' : 'x86_64';
+}
+
+function amiExpression(cfgAmi: unknown, instanceType: string, target: CompileTarget): string {
+  const ami = typeof cfgAmi === 'string' && cfgAmi.trim() ? cfgAmi.trim() : PLACEHOLDER_AMI;
+  if (target === 'aws' && ami === PLACEHOLDER_AMI) {
+    return `data.aws_ssm_parameter.al2023_ami_${amiArchForInstanceType(instanceType)}.insecure_value`;
+  }
+  return `"${ami}"`;
+}
+
 export interface CompiledTerraformBundle {
   environment: EnvironmentProfile;
+  target: CompileTarget;
   mainTf: string;
   providerTf: string;
   variablesTf: string;
   tfvars: string;
   outputsTf: string;
+  /** AWS export only: the S3 backend block, and its per-environment settings to fill in. Empty for the emulator. */
+  backendTf: string;
+  backendConfig: string;
   emulatorScriptSh: string;
   dockerfile: string;
   dockerComposeYml: string;
@@ -90,7 +131,7 @@ export function compileTerraformForEnvironment(
   edges: CloudEdge[],
   envProfile: EnvironmentProfile,
   allEnvironments: Record<EnvironmentId, EnvironmentProfile>,
-  targetLocalEmulator: boolean
+  target: CompileTarget = 'emulator'
 ): CompiledTerraformBundle {
   const envId = envProfile.id;
   const activeNodes = nodes.filter((n) => n.data.envEnabled?.[envId] !== false);
@@ -119,17 +160,14 @@ export function compileTerraformForEnvironment(
   const sgNodes = activeNodes.filter((n) => n.data.serviceType === 'aws_security_group');
 
   // 1. Generate provider.tf
-  const providerTf = generateProviderTf(envProfile, targetLocalEmulator);
-
-  // 2. Generate variables.tf & <env>.tfvars
-  const { variablesTf, tfvars } = generateVariablesAndTfvars(envProfile, allEnvironments);
+  const providerTf = generateProviderTf(envProfile, target);
 
   // 3. Generate main.tf resources and wiring
   const resourceBlocks: string[] = [];
 
   resourceBlocks.push(`# ============================================================================
 # LocalCloud Studio — Compiled Terraform Infrastructure (${envProfile.name.toUpperCase()})
-# Target Mode: ${targetLocalEmulator ? `AWS Emulator (${envProfile.emulatorEndpoint})` : `Production AWS (${envProfile.region})`}
+# Target Mode: ${target === 'emulator' ? `AWS Emulator (${envProfile.emulatorEndpoint})` : `AWS (${envProfile.region})`}
 # Active Resources: ${activeNodes.length} | Wired Connections: ${activeEdges.length}
 # ============================================================================
 
@@ -205,7 +243,8 @@ locals {
       incoming,
       outgoing,
       nodeById,
-      dependsOnLine
+      dependsOnLine,
+      target
     );
 
     const extraHcl = typeof cfg[EXTRA_HCL_KEY] === 'string' ? cfg[EXTRA_HCL_KEY] : '';
@@ -225,7 +264,32 @@ locals {
     resourceBlocks.push(...wiringBlocks);
   }
 
+  // AWS export: look up the current Amazon Linux 2023 image instead of a fixed AMI ID
+  if (target === 'aws') {
+    for (const arch of ['x86_64', 'arm64'] as const) {
+      const ref = `data.aws_ssm_parameter.al2023_ami_${arch}`;
+      if (resourceBlocks.some((b) => b.includes(ref))) {
+        resourceBlocks.splice(
+          1,
+          0,
+          `# Latest Amazon Linux 2023 image for this region (set an AMI on the node to pin one)
+data "aws_ssm_parameter" "al2023_ami_${arch}" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-${arch}"
+}`
+        );
+      }
+    }
+  }
+
   const mainTf = resourceBlocks.join('\n\n') + '\n';
+
+  // 2. Generate variables.tf & <env>.tfvars (after main.tf, which decides the network inputs it needs)
+  const { variablesTf, tfvars } = generateVariablesAndTfvars(envProfile, allEnvironments, target, {
+    vpcId: /\bvar\.vpc_id\b/.test(mainTf),
+    subnetIds: /\bvar\.subnet_ids\b/.test(mainTf),
+  });
+  const { backendTf, backendConfig } =
+    target === 'aws' ? generateS3Backend(envProfile) : { backendTf: '', backendConfig: '' };
 
   // 5. Generate outputs.tf
   const outputsTf = generateOutputsTf(activeNodes);
@@ -237,11 +301,14 @@ locals {
 
   return {
     environment: envProfile,
+    target,
     mainTf,
     providerTf,
     variablesTf,
     tfvars,
     outputsTf,
+    backendTf,
+    backendConfig,
     emulatorScriptSh,
     dockerfile,
     dockerComposeYml,
@@ -250,11 +317,18 @@ locals {
 
 function generateProviderTf(
   env: EnvironmentProfile,
-  targetLocalEmulator: boolean
+  target: CompileTarget
 ): string {
-  if (!targetLocalEmulator) {
-    return `terraform {
-  required_version = ">= 1.5.0"
+  if (target === 'aws') {
+    return `# ============================================================================
+# AWS Provider: ${env.name} (${env.id}), ${env.region}
+# Credentials come from your usual AWS setup (profile, SSO, CI role).
+# Remote state is configured in backend.tf.
+# ============================================================================
+
+terraform {
+  # 1.10+ for S3 native state locking (use_lockfile in backend.tfbackend)
+  required_version = ">= 1.10.0"
 
   required_providers {
     aws = {
@@ -346,10 +420,74 @@ provider "aws" {
 `;
 }
 
+function generateS3Backend(env: EnvironmentProfile): { backendTf: string; backendConfig: string } {
+  const backendTf = `# Remote state in S3. The settings live in backend.tfbackend so each environment
+# can point at its own bucket or account:
+#   terraform init -backend-config=backend.tfbackend
+#
+# Using Terraform Cloud or another backend instead? Replace this block.
+
+terraform {
+  backend "s3" {}
+}
+`;
+
+  const backendConfig = `# State settings for ${env.name} (${env.id}). Fill in once; LocalCloud never overwrites this file.
+# The bucket must exist before \`terraform init\` and should have versioning enabled.
+
+bucket       = "CHANGE-ME-terraform-state"
+key          = "localcloud/${env.id}/terraform.tfstate"
+region       = "${env.region}"
+encrypt      = true
+use_lockfile = true
+`;
+
+  return { backendTf, backendConfig };
+}
+
 function generateVariablesAndTfvars(
   env: EnvironmentProfile,
-  allEnvs: Record<EnvironmentId, EnvironmentProfile>
+  allEnvs: Record<EnvironmentId, EnvironmentProfile>,
+  target: CompileTarget,
+  needs: { vpcId: boolean; subnetIds: boolean }
 ): { variablesTf: string; tfvars: string } {
+  const isAws = target === 'aws';
+  const tags = Object.entries(env.defaultTags).filter(([k]) => !isAws || !EMULATOR_ONLY_TAGS.has(k));
+
+  const emulatorVariables = isAws
+    ? ''
+    : `variable "emulator_port" {
+  description = "Local AWS Emulator port for isolated environment state"
+  type        = number
+  default     = ${env.emulatorPort}
+}
+
+variable "emulator_endpoint" {
+  description = "Local AWS Emulator HTTPS endpoint URL"
+  type        = string
+  default     = "${env.emulatorEndpoint}"
+}
+
+`;
+
+  // Resources that need a network when the canvas has no VPC / Subnet nodes take existing ones
+  const networkVariables = [
+    needs.vpcId &&
+      `variable "vpc_id" {
+  description = "Existing VPC for resources that are not placed in a VPC on the canvas"
+  type        = string
+}
+`,
+    needs.subnetIds &&
+      `variable "subnet_ids" {
+  description = "Existing subnets for resources that are not placed in a subnet on the canvas"
+  type        = list(string)
+}
+`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
   const variablesTf = `variable "environment" {
   description = "Target deployment environment (dev, testing, staging, prod)"
   type        = string
@@ -362,35 +500,32 @@ variable "aws_region" {
   default     = "${env.region}"
 }
 
-variable "emulator_port" {
-  description = "Local AWS Emulator port for isolated environment state"
-  type        = number
-  default     = ${env.emulatorPort}
-}
-
-variable "emulator_endpoint" {
-  description = "Local AWS Emulator HTTPS endpoint URL"
-  type        = string
-  default     = "${env.emulatorEndpoint}"
-}
-
-variable "default_tags" {
+${emulatorVariables}variable "default_tags" {
   description = "Default resource tags applied across the environment"
   type        = map(string)
   default     = {
-${Object.entries(env.defaultTags)
-  .map(([k, v]) => `    ${k} = "${v}"`)
-  .join('\n')}
+${tags.map(([k, v]) => `    ${k} = "${v}"`).join('\n')}
   }
 }
-`;
+${networkVariables ? `\n${networkVariables}` : ''}`;
 
   const envSummaryComments = Object.values(allEnvs)
-    .map(
-      (e) =>
-        `#   - ${e.id.padEnd(8)} : region=${e.region}, port=${e.emulatorPort}, endpoint=${e.emulatorEndpoint}`
+    .map((e) =>
+      isAws
+        ? `#   - ${e.id.padEnd(8)} : region=${e.region}`
+        : `#   - ${e.id.padEnd(8)} : region=${e.region}, port=${e.emulatorPort}, endpoint=${e.emulatorEndpoint}`
     )
     .join('\n');
+
+  const networkTfvars =
+    needs.vpcId || needs.subnetIds
+      ? `
+# Required: some resources need a network, and the canvas has no VPC or Subnet for them in ${env.id}.
+# Either place them in a VPC / Subnet on the canvas, or point them at existing ones here.
+${needs.vpcId ? `vpc_id     = "CHANGE-ME"  # e.g. "vpc-0123456789abcdef0"\n` : ''}${
+          needs.subnetIds ? `subnet_ids = ["CHANGE-ME"] # e.g. ["subnet-0aaa...", "subnet-0bbb..."]\n` : ''
+        }`
+      : '';
 
   const tfvars = `# ============================================================================
 # Environment Variable Values: ${env.name} (${env.id}.tfvars)
@@ -398,17 +533,20 @@ ${Object.entries(env.defaultTags)
 ${envSummaryComments}
 # ============================================================================
 
-environment       = "${env.id}"
+${
+  isAws
+    ? `environment = "${env.id}"
+aws_region  = "${env.region}"`
+    : `environment       = "${env.id}"
 aws_region        = "${env.region}"
 emulator_port     = ${env.emulatorPort}
-emulator_endpoint = "${env.emulatorEndpoint}"
+emulator_endpoint = "${env.emulatorEndpoint}"`
+}
 
 default_tags = {
-${Object.entries(env.defaultTags)
-  .map(([k, v]) => `  ${k} = "${v}"`)
-  .join('\n')}
+${tags.map(([k, v]) => `  ${k} = "${v}"`).join('\n')}
 }
-`;
+${networkTfvars}`;
 
   return { variablesTf, tfvars };
 }
@@ -424,12 +562,17 @@ function renderResourceBlock(
   incoming: CloudEdge[],
   outgoing: CloudEdge[],
   nodeById: Record<string, CloudNode>,
-  dependsOnLine: string
+  dependsOnLine: string,
+  target: CompileTarget
 ): string {
   const type = node.data.serviceType;
+  const isAws = target === 'aws';
+  // Without a VPC / Subnet on the canvas the emulator accepts placeholder IDs; real AWS needs existing ones
   const vpcRef = connectedVpc
     ? `aws_vpc.${sanitizeIdentifier(connectedVpc.data.resourceName || connectedVpc.data.label)}.id`
-    : `"vpc-default-${envId}"`;
+    : isAws
+      ? 'var.vpc_id'
+      : `"vpc-default-${envId}"`;
 
   const subnetIdsArray =
     effectiveSubnets.length > 0
@@ -439,14 +582,18 @@ function renderResourceBlock(
               `aws_subnet.${sanitizeIdentifier(s.data.resourceName || s.data.label)}.id`
           )
           .join(', ')}]`
-      : `["subnet-default-${envId}-a", "subnet-default-${envId}-b"]`;
+      : isAws
+        ? 'var.subnet_ids'
+        : `["subnet-default-${envId}-a", "subnet-default-${envId}-b"]`;
 
   const firstSubnetRef =
     effectiveSubnets.length > 0
       ? `aws_subnet.${sanitizeIdentifier(
           effectiveSubnets[0].data.resourceName || effectiveSubnets[0].data.label
         )}.id`
-      : `"subnet-default-${envId}-a"`;
+      : isAws
+        ? 'var.subnet_ids[0]'
+        : `"subnet-default-${envId}-a"`;
 
   const sgIdsArray =
     effectiveSgs.length > 0
@@ -565,7 +712,7 @@ resource "aws_nat_gateway" "${resName}" {
 
     case 'aws_lb':
       return `resource "aws_lb" "${resName}" {
-  name                       = substr("\${local.name_prefix}-${resName}", 0, 32)
+  name                       = ${dnsSafeName(resName, 32)}
   internal                   = ${Boolean(cfg.internal ?? false)}
   load_balancer_type         = "${cfg.load_balancer_type || 'application'}"
   subnets                    = ${subnetIdsArray}
@@ -579,7 +726,7 @@ resource "aws_nat_gateway" "${resName}" {
 }
 
 resource "aws_lb_target_group" "${resName}_tg" {
-  name        = substr("\${local.name_prefix}-${resName}-tg", 0, 32)
+  name        = ${dnsSafeName(`${resName}-tg`, 32)}
   port        = ${Number(cfg.listener_port ?? 80)}
   protocol    = "HTTP"
   vpc_id      = ${vpcRef}
@@ -719,7 +866,7 @@ ${
 
     case 'aws_instance':
       return `resource "aws_instance" "${resName}" {
-  ami                         = "${cfg.ami || 'ami-0c55b159cbfafe1f0'}"
+  ami                         = ${amiExpression(cfg.ami, cfg.instance_type || 't3.micro', target)}
   instance_type               = "${cfg.instance_type || 't3.micro'}"
   subnet_id                   = ${firstSubnetRef}
   vpc_security_group_ids      = ${sgIdsArray}
@@ -824,7 +971,7 @@ ${envEntries}
     case 'aws_autoscaling_group':
       return `resource "aws_launch_template" "${resName}_lt" {
   name_prefix   = "\${local.name_prefix}-${resName}-"
-  image_id      = "ami-0c55b159cbfafe1f0"
+  image_id      = ${amiExpression(undefined, cfg.instance_type || 't3.medium', target)}
   instance_type = "${cfg.instance_type || 't3.medium'}"
 }
 
@@ -941,7 +1088,7 @@ resource "aws_eks_cluster" "${resName}" {
     case 'aws_s3_bucket': {
       const blocks: string[] = [];
       blocks.push(`resource "aws_s3_bucket" "${resName}" {
-  bucket        = "\${local.name_prefix}-${cfg.bucket_prefix || resName}"
+  bucket        = ${dnsSafeName(String(cfg.bucket_prefix || resName), 63)}
   force_destroy = ${Boolean(cfg.force_destroy ?? true)}
 
   tags = merge(local.common_tags, {
@@ -1056,7 +1203,7 @@ ${
 
     case 'aws_db_instance':
       return `resource "aws_db_instance" "${resName}" {
-  identifier              = "\${local.name_prefix}-${resName}"
+  identifier              = ${dnsSafeName(resName, 63)}
   engine                  = "${cfg.engine || 'postgres'}"
   engine_version          = "${cfg.engine_version || '16.3'}"
   instance_class          = "${cfg.instance_class || 'db.t4g.micro'}"
@@ -1078,7 +1225,7 @@ ${
 
     case 'aws_elasticache_cluster':
       return `resource "aws_elasticache_cluster" "${resName}" {
-  cluster_id           = "\${local.name_prefix}-${resName}"
+  cluster_id           = ${dnsSafeName(resName, 50)}
   engine               = "${cfg.engine || 'redis'}"
   node_type            = "${cfg.node_type || 'cache.t4g.micro'}"
   num_cache_nodes      = ${Number(cfg.num_cache_nodes ?? 1)}
@@ -1241,7 +1388,16 @@ resource "aws_secretsmanager_secret_version" "${resName}_val" {
   name                     = "\${local.name_prefix}-${resName}"
   mfa_configuration        = "${cfg.mfa_configuration || 'OFF'}"
   auto_verified_attributes = ${cfg.auto_verified_attributes ? '["email"]' : '[]'}
-
+${
+  // OPTIONAL or ON needs an MFA method; authenticator apps need no SMS setup
+  (cfg.mfa_configuration || 'OFF') !== 'OFF'
+    ? `
+  software_token_mfa_configuration {
+    enabled = true
+  }
+`
+    : ''
+}
   password_policy {
     minimum_length    = ${Number(cfg.password_minimum_length ?? 8)}
     require_lowercase = true
@@ -1286,8 +1442,10 @@ resource "aws_cognito_user_pool_client" "${resName}_client" {
 
     case 'aws_kinesis_stream':
       return `resource "aws_kinesis_stream" "${resName}" {
-  name             = "\${local.name_prefix}-${resName}"
-  retention_period = ${Number(cfg.retention_period ?? 24)}
+  name             = "\${local.name_prefix}-${resName}"${
+    // 24h is the AWS default; setting it explicitly makes the provider ask to "increase" to the same value, which fails
+    Number(cfg.retention_period ?? 24) !== 24 ? `\n  retention_period = ${Number(cfg.retention_period)}` : ''
+  }
 ${
   cfg.stream_mode === 'PROVISIONED'
     ? `  shard_count      = ${Number(cfg.shard_count ?? 1)}`
@@ -1302,7 +1460,7 @@ ${
 
     case 'aws_opensearch_domain':
       return `resource "aws_opensearch_domain" "${resName}" {
-  domain_name    = substr("\${local.name_prefix}-${resName}", 0, 28)
+  domain_name    = ${dnsSafeName(resName, 28)}
   engine_version = "${cfg.engine_version || 'OpenSearch_2.15'}"
 
   cluster_config {

@@ -22,7 +22,7 @@ function nodeFor(typeId: string, extra: Partial<CloudNode['data']> = {}): CloudN
 }
 
 const compileMain = (node: CloudNode, envId: 'dev' | 'prod' = 'dev') =>
-  compileTerraformForEnvironment([node], [], DEFAULT_ENVIRONMENTS[envId], DEFAULT_ENVIRONMENTS, true).mainTf;
+  compileTerraformForEnvironment([node], [], DEFAULT_ENVIRONMENTS[envId], DEFAULT_ENVIRONMENTS).mainTf;
 
 /** The body of `resource "<type>" "<name>" { ... }`, found by brace matching. */
 function blockBody(mainTf: string, tfType: string, name: string): string {

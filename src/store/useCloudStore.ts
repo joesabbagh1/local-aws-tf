@@ -26,8 +26,11 @@ import {
   compileTerraformForEnvironment,
   resolveNodeConfigForEnv,
   sanitizeIdentifier,
+  type CompileTarget,
 } from '../utils/terraformCompiler';
-import { parseTerraformHclToCanvas } from '../utils/hclImporter';
+import { AWS_EXPORT_USER_FILES } from '../utils/awsExport';
+import { statusFromState } from '../utils/terraformState';
+import { parseTerraformHclToCanvas, type HclImportResult } from '../utils/hclImporter';
 import { toProjectFile, withRuntimeStateFrom } from '../utils/projectFile';
 import {
   buildResourceNameResolver,
@@ -51,6 +54,9 @@ export type RightDrawerTab =
   | 'emulator'
   | 'explorer'
   | 'audit';
+
+/** The main area: the architecture canvas or the cost analytics page. */
+export type WorkspaceView = 'design' | 'costs';
 
 export type TerraformCommand = 'init' | 'validate' | 'plan' | 'apply' | 'destroy';
 
@@ -76,7 +82,6 @@ interface HistorySnapshot {
 interface CloudStudioState {
   activeEnv: EnvironmentId;
   environments: Record<EnvironmentId, EnvironmentProfile>;
-  targetLocalEmulator: boolean;
 
   nodes: CloudNode[];
   edges: CloudEdge[];
@@ -88,15 +93,20 @@ interface CloudStudioState {
   future: HistorySnapshot[];
 
   // UI Panels & Modals
+  view: WorkspaceView;
   rightTab: RightDrawerTab;
+  isCatalogOpen: boolean;
+  isDrawerOpen: boolean;
   isTemplateModalOpen: boolean;
   isImportModalOpen: boolean;
+  isExportModalOpen: boolean;
   emulatorStatuses: Record<number, { running: boolean; status: string; caExists: boolean }>;
 
   // Live Terminal / Execution Output
   terminalLogs: string[];
   isRunningCommand: boolean;
   runningCommand: TerraformCommand | null;
+  runningEnv: EnvironmentId | null;
   pendingPlan: PendingPlan | null;
   projectFile: ProjectFileStatus;
 
@@ -108,7 +118,6 @@ interface CloudStudioState {
 
   setActiveEnv: (env: EnvironmentId) => void;
   updateEnvironmentProfile: (env: EnvironmentId, patch: Partial<EnvironmentProfile>) => void;
-  setTargetLocalEmulator: (enabled: boolean) => void;
 
   onNodesChange: OnNodesChange<CloudNode>;
   onEdgesChange: OnEdgesChange<CloudEdge>;
@@ -118,9 +127,14 @@ interface CloudStudioState {
 
   selectNode: (nodeId: string | null) => void;
   selectEdge: (edgeId: string | null) => void;
+  /** Switches the drawer tab and opens the drawer if it is collapsed. */
   setRightTab: (tab: RightDrawerTab) => void;
+  setView: (view: WorkspaceView) => void;
+  setCatalogOpen: (open: boolean) => void;
+  setDrawerOpen: (open: boolean) => void;
   setTemplateModalOpen: (open: boolean) => void;
   setImportModalOpen: (open: boolean) => void;
+  setExportModalOpen: (open: boolean) => void;
 
   addServiceNode: (serviceType: string, position?: { x: number; y: number }) => void;
   duplicateNode: (nodeId: string) => void;
@@ -130,7 +144,7 @@ interface CloudStudioState {
 
   updateNodeMetadata: (
     nodeId: string,
-    patch: { label?: string; resourceName?: string; notes?: string; inlineCode?: string }
+    patch: { label?: string; resourceName?: string; notes?: string; inlineCode?: string; sourceDir?: string }
   ) => void;
   updateNodeProperty: (
     nodeId: string,
@@ -145,7 +159,7 @@ interface CloudStudioState {
   updateEdgeData: (edgeId: string, patch: Partial<NonNullable<CloudEdge['data']>>) => void;
 
   loadTemplate: (templateId: string) => void;
-  importTerraformHcl: (hclText: string) => number;
+  importTerraformHcl: (hclText: string) => HclImportResult;
   exportProjectJson: () => string;
   importProjectJson: (jsonText: string) => boolean;
   clearCanvas: () => void;
@@ -153,6 +167,8 @@ interface CloudStudioState {
 
   refreshEmulatorStatuses: () => Promise<void>;
   syncTerraformToDisk: () => Promise<{ ok: boolean; writtenFiles?: string[] }>;
+  /** Writes Terraform for real AWS accounts to ./terraform-aws. LocalCloud never runs it. */
+  exportForAws: () => Promise<{ ok: boolean; writtenFiles?: string[]; keptFiles?: string[]; error?: string }>;
   controlEmulatorContainer: (action: 'start' | 'stop', envId?: EnvironmentId) => Promise<void>;
   runTerraformCommand: (
     command: TerraformCommand,
@@ -163,7 +179,8 @@ interface CloudStudioState {
   requestApply: (envId?: EnvironmentId) => Promise<void>;
   discardPlan: () => void;
   loadProjectFromDisk: () => Promise<void>;
-  fetchTerraformOutputs: (envId: EnvironmentId) => Promise<void>;
+  /** Node status and outputs from each environment's Terraform state (all environments by default). */
+  syncStatusFromState: (envIds?: EnvironmentId[]) => Promise<void>;
   appendTerminalLog: (msg: string) => void;
   clearTerminalLogs: () => void;
 }
@@ -181,20 +198,72 @@ const TF_ERROR_RESOURCE = /with (?:module\.[^\s]+\.)?([a-z0-9_]+)\.([A-Za-z0-9_-
 
 /** Everything that decides what `terraform plan` would do for one environment. */
 function planFingerprint(
-  state: Pick<CloudStudioState, 'nodes' | 'edges' | 'environments' | 'targetLocalEmulator'>,
+  state: Pick<CloudStudioState, 'nodes' | 'edges' | 'environments'>,
   envId: EnvironmentId
 ): string {
-  const compiled = compileTerraformForEnvironment(
-    state.nodes,
-    state.edges,
-    state.environments[envId],
-    state.environments,
-    state.targetLocalEmulator
-  );
+  const compiled = compileTerraformForEnvironment(state.nodes, state.edges, state.environments[envId], state.environments);
   const lambdaCode = state.nodes
     .filter((n) => n.data.serviceType === 'aws_lambda_function' && n.data.envEnabled?.[envId] !== false)
-    .map((n) => `${n.id}:${n.data.inlineCode || ''}`);
+    .map((n) => `${n.id}:${n.data.sourceDir ?? ''}:${n.data.inlineCode || ''}`);
   return [compiled.mainTf, compiled.providerTf, compiled.variablesTf, compiled.tfvars, compiled.outputsTf, ...lambdaCode].join('\u0000');
+}
+
+interface LambdaArtifact {
+  envId: EnvironmentId;
+  resourceName: string;
+  runtime: string;
+  handler: string;
+  code?: string;
+  sourceDir?: string;
+}
+
+/** Every file of one compile target, laid out as environments/<env>/…, plus the Lambda zips to build. */
+function buildTerraformFiles(
+  state: Pick<CloudStudioState, 'nodes' | 'edges' | 'environments'>,
+  target: CompileTarget
+) {
+  const { nodes, edges, environments } = state;
+  const files: Record<string, string> = {};
+  const filesIfMissing: Record<string, string> = {};
+  const lambdaArtifacts: LambdaArtifact[] = [];
+
+  for (const envId of ENV_ORDER) {
+    const compiled = compileTerraformForEnvironment(nodes, edges, environments[envId], environments, target);
+    const dir = `environments/${envId}`;
+    files[`${dir}/main.tf`] = compiled.mainTf;
+    files[`${dir}/provider.tf`] = compiled.providerTf;
+    files[`${dir}/variables.tf`] = compiled.variablesTf;
+    files[`${dir}/${envId}.tfvars`] = compiled.tfvars;
+    files[`${dir}/outputs.tf`] = compiled.outputsTf;
+
+    if (target === 'emulator') {
+      files[`${dir}/run-emulator-${envId}.sh`] = compiled.emulatorScriptSh;
+      if (envId === 'dev') {
+        files['Dockerfile.emulator'] = compiled.dockerfile;
+        files['docker-compose.emulator.yml'] = compiled.dockerComposeYml;
+      }
+    } else {
+      files[`${dir}/backend.tf`] = compiled.backendTf;
+      // Filled in by the user once; later exports keep their values
+      for (const name of AWS_EXPORT_USER_FILES) filesIfMissing[`${dir}/${name}`] = compiled.backendConfig;
+    }
+
+    for (const n of nodes) {
+      if (n.data.serviceType === 'aws_lambda_function' && n.data.envEnabled?.[envId] !== false) {
+        const cfg = resolveNodeConfigForEnv(n, envId);
+        lambdaArtifacts.push({
+          envId,
+          resourceName: sanitizeIdentifier(n.data.resourceName || n.data.label),
+          runtime: String(cfg.runtime || 'nodejs20.x'),
+          handler: String(cfg.handler || 'index.handler'),
+          code: n.data.inlineCode,
+          sourceDir: n.data.sourceDir,
+        });
+      }
+    }
+  }
+
+  return { files, filesIfMissing, lambdaArtifacts };
 }
 
 function withProvisioningState(
@@ -263,7 +332,6 @@ export const useCloudStore = create<CloudStudioState>()(
     (set, get) => ({
       activeEnv: 'dev',
       environments: { ...DEFAULT_ENVIRONMENTS },
-      targetLocalEmulator: true,
 
       nodes: normalizeNodes(initialTemplate.nodes),
       edges: initialTemplate.edges,
@@ -273,9 +341,13 @@ export const useCloudStore = create<CloudStudioState>()(
       past: [],
       future: [],
 
+      view: 'design',
       rightTab: 'inspector',
+      isCatalogOpen: true,
+      isDrawerOpen: true,
       isTemplateModalOpen: false,
       isImportModalOpen: false,
+      isExportModalOpen: false,
       emulatorStatuses: {
         9297: { running: false, status: 'unchecked', caExists: false },
         9298: { running: false, status: 'unchecked', caExists: false },
@@ -288,6 +360,7 @@ export const useCloudStore = create<CloudStudioState>()(
       ],
       isRunningCommand: false,
       runningCommand: null,
+      runningEnv: null,
       pendingPlan: null,
       projectFile: { state: 'unknown' },
 
@@ -355,7 +428,6 @@ export const useCloudStore = create<CloudStudioState>()(
           },
         })),
 
-      setTargetLocalEmulator: (enabled) => set({ targetLocalEmulator: enabled }),
 
       onNodesChange: (changes) => {
         set({
@@ -448,9 +520,13 @@ export const useCloudStore = create<CloudStudioState>()(
           selectedNodeId: null,
         }),
 
-      setRightTab: (tab) => set({ rightTab: tab }),
+      setRightTab: (tab) => set({ rightTab: tab, isDrawerOpen: true }),
+      setView: (view) => set({ view }),
+      setCatalogOpen: (open) => set({ isCatalogOpen: open }),
+      setDrawerOpen: (open) => set({ isDrawerOpen: open }),
       setTemplateModalOpen: (open) => set({ isTemplateModalOpen: open }),
       setImportModalOpen: (open) => set({ isImportModalOpen: open }),
+      setExportModalOpen: (open) => set({ isExportModalOpen: open }),
 
       addServiceNode: (serviceType, position) => {
         const svc = SERVICE_BY_TYPE[serviceType];
@@ -728,28 +804,26 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       importTerraformHcl: (hclText) => {
-        const { nodes, edges, importedCount } = parseTerraformHclToCanvas(hclText);
-        if (importedCount > 0) {
+        const result = parseTerraformHclToCanvas(hclText);
+        if (result.importedCount > 0) {
           get().pushHistory();
           set({
-            nodes: autoLayoutNodes(normalizeNodes(nodes)),
-            edges,
-            selectedNodeId: nodes[0]?.id || null,
+            nodes: autoLayoutNodes(normalizeNodes(result.nodes)),
+            edges: result.edges,
+            selectedNodeId: result.nodes[0]?.id || null,
             selectedEdgeId: null,
-            isImportModalOpen: false,
           });
         }
-        return importedCount;
+        return result;
       },
 
       exportProjectJson: () => {
-        const { nodes, edges, environments, activeEnv, targetLocalEmulator } = get();
+        const { nodes, edges, environments, activeEnv } = get();
         return JSON.stringify(
           {
             version: '2.0.0',
             exportedAt: new Date().toISOString(),
             activeEnv,
-            targetLocalEmulator,
             environments,
             nodes,
             edges,
@@ -811,67 +885,44 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       syncTerraformToDisk: async () => {
-        const { nodes, edges, environments, targetLocalEmulator, appendTerminalLog } = get();
-        const files: Record<string, string> = {};
-        const lambdaArtifacts: {
-          envId: EnvironmentId;
-          resourceName: string;
-          runtime: string;
-          handler: string;
-          code?: string;
-        }[] = [];
-
-        for (const envId of ENV_ORDER) {
-          const profile = environments[envId];
-          const compiled = compileTerraformForEnvironment(
-            nodes,
-            edges,
-            profile,
-            environments,
-            targetLocalEmulator
-          );
-          files[`environments/${envId}/main.tf`] = compiled.mainTf;
-          files[`environments/${envId}/provider.tf`] = compiled.providerTf;
-          files[`environments/${envId}/variables.tf`] = compiled.variablesTf;
-          files[`environments/${envId}/${envId}.tfvars`] = compiled.tfvars;
-          files[`environments/${envId}/outputs.tf`] = compiled.outputsTf;
-          files[`environments/${envId}/run-emulator-${envId}.sh`] = compiled.emulatorScriptSh;
-
-          if (envId === 'dev') {
-            files['Dockerfile.emulator'] = compiled.dockerfile;
-            files['docker-compose.emulator.yml'] = compiled.dockerComposeYml;
-          }
-
-          for (const n of nodes) {
-            if (n.data.serviceType === 'aws_lambda_function' && n.data.envEnabled?.[envId] !== false) {
-              const cfg = resolveNodeConfigForEnv(n, envId);
-              lambdaArtifacts.push({
-                envId,
-                resourceName: sanitizeIdentifier(n.data.resourceName || n.data.label),
-                runtime: String(cfg.runtime || 'nodejs20.x'),
-                handler: String(cfg.handler || 'index.handler'),
-                code: n.data.inlineCode,
-              });
-            }
-          }
-        }
+        const { appendTerminalLog } = get();
+        const { files, lambdaArtifacts } = buildTerraformFiles(get(), 'emulator');
 
         try {
           const res = await fetch('/api/terraform/export', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ files, lambdaArtifacts }),
+            body: JSON.stringify({ target: 'emulator', files, lambdaArtifacts }),
           });
           const data = await res.json();
           if (data.ok) {
             appendTerminalLog(
               `Synced ${data.writtenFiles?.length || 0} Terraform & Lambda zip artifacts to ./terraform-out`
             );
-            return { ok: true, writtenFiles: data.writtenFiles };
+            for (const error of data.errors || []) appendTerminalLog(`Error: ${error}`);
+            return { ok: (data.errors || []).length === 0, writtenFiles: data.writtenFiles };
           }
           return { ok: false };
         } catch {
           return { ok: false };
+        }
+      },
+
+      exportForAws: async () => {
+        const { files, filesIfMissing, lambdaArtifacts } = buildTerraformFiles(get(), 'aws');
+        try {
+          const res = await fetch('/api/terraform/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target: 'aws', files, filesIfMissing, lambdaArtifacts }),
+          });
+          const data = await res.json();
+          if (!data.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+          if (data.errors?.length) return { ok: false, error: data.errors.join(' · ') };
+          get().appendTerminalLog(`Exported Terraform for AWS to ./${data.outDir} (${data.writtenFiles?.length || 0} files)`);
+          return { ok: true, writtenFiles: data.writtenFiles, keptFiles: data.keptFiles };
+        } catch (err: any) {
+          return { ok: false, error: err?.message || 'The local API is not reachable' };
         }
       },
 
@@ -939,6 +990,7 @@ export const useCloudStore = create<CloudStudioState>()(
         set((state) => ({
           isRunningCommand: true,
           runningCommand: command,
+          runningEnv: envId,
           pendingPlan: keepPlan || state.pendingPlan?.envId !== envId ? state.pendingPlan : null,
         }));
         const fingerprint = planFingerprint(get(), envId);
@@ -963,11 +1015,12 @@ export const useCloudStore = create<CloudStudioState>()(
 
         const synced = await syncTerraformToDisk();
         if (!synced.ok) {
-          appendTerminalLog(`Error: ${tag} could not write ./terraform-out (is the dev server running?)`);
+          appendTerminalLog(`Error: ${tag} ./terraform-out could not be prepared (see above, or is the local server running?). Nothing was run.`);
           set((state) => ({
             nodes: withProvisioningState(state.nodes, envId, (n) => previousStates[n.id] ?? 'unapplied'),
             isRunningCommand: false,
             runningCommand: null,
+            runningEnv: null,
           }));
           return;
         }
@@ -1060,6 +1113,7 @@ export const useCloudStore = create<CloudStudioState>()(
           }),
           isRunningCommand: false,
           runningCommand: null,
+          runningEnv: null,
           pendingPlan:
             command === 'plan' && ok && planChanges
               ? { envId, fingerprint, ...summarizePlan(planChanges, state.nodes, envId) }
@@ -1074,65 +1128,47 @@ export const useCloudStore = create<CloudStudioState>()(
             : `Warning: ${tag} terraform ${command} exited with code ${exitCode}.`
         );
 
-        if (ok && command === 'apply') await get().fetchTerraformOutputs(envId);
-        if (ok && command === 'destroy') {
-          set((state) => ({
-            nodes: state.nodes.map((n) =>
-              n.data.provisionedOutputs?.[envId]
-                ? {
-                    ...n,
-                    data: {
-                      ...n.data,
-                      provisionedOutputs: { ...n.data.provisionedOutputs, [envId]: undefined },
-                    },
-                  }
-                : n
-            ),
-          }));
-        }
+        // Whatever the outcome, state now says what exists (a failed apply can still create some resources)
+        if (command === 'apply' || command === 'destroy') await get().syncStatusFromState([envId]);
       },
 
-      fetchTerraformOutputs: async (envId) => {
-        try {
-          const res = await fetch(`/api/terraform/outputs?envId=${envId}`);
-          const data = await res.json();
-          if (!data.ok || !data.outputs) return;
-
-          const byNode: Record<string, Record<string, string>> = {};
-          const resNames = get()
-            .nodes.map((n) => ({ id: n.id, resName: sanitizeIdentifier(n.data.resourceName || n.data.label) }))
-            .sort((a, b) => b.resName.length - a.resName.length);
-
-          for (const [name, out] of Object.entries<any>(data.outputs)) {
-            const match = resNames.find((r) => name.startsWith(`${r.resName}_`));
-            if (!match) continue;
-            const key = name.slice(match.resName.length + 1);
-            const value = out?.value;
-            byNode[match.id] = {
-              ...(byNode[match.id] || {}),
-              [key]: typeof value === 'string' ? value : JSON.stringify(value),
-            };
-          }
-
-          set((state) => ({
-            nodes: state.nodes.map((n) =>
-              byNode[n.id]
-                ? {
-                    ...n,
-                    data: {
-                      ...n.data,
-                      provisionedOutputs: { ...(n.data.provisionedOutputs || {}), [envId]: byNode[n.id] },
-                    },
-                  }
-                : n
-            ),
-          }));
-          get().appendTerminalLog(
-            `[${envId.toUpperCase()}] Captured ${Object.keys(data.outputs).length} Terraform outputs onto canvas nodes.`
-          );
-        } catch {
-          // Outputs are a convenience; the apply itself already succeeded
-        }
+      syncStatusFromState: async (envIds = ENV_ORDER) => {
+        await Promise.all(
+          envIds.map(async (envId) => {
+            try {
+              const res = await fetch(`/api/terraform/state?envId=${envId}`);
+              const data = await res.json();
+              if (!data.ok) return;
+              set((state) => {
+                // Don't fight a run that is updating this environment live
+                if (state.isRunningCommand && state.runningEnv === envId) return {};
+                const { status, outputs } = statusFromState(state.nodes, envId, data);
+                return {
+                  nodes: state.nodes.map((n) => {
+                    const nextStatus = status[n.id];
+                    const nextOutputs = outputs[n.id];
+                    if (
+                      n.data.provisioningStatus?.[envId] === nextStatus &&
+                      JSON.stringify(n.data.provisionedOutputs?.[envId]) === JSON.stringify(nextOutputs)
+                    ) {
+                      return n;
+                    }
+                    return {
+                      ...n,
+                      data: {
+                        ...n.data,
+                        provisioningStatus: { ...(n.data.provisioningStatus || {}), [envId]: nextStatus },
+                        provisionedOutputs: { ...(n.data.provisionedOutputs || {}), [envId]: nextOutputs },
+                      },
+                    };
+                  }),
+                };
+              });
+            } catch {
+              // No local API (static preview): keep whatever status the browser had
+            }
+          })
+        );
       },
 
       loadProjectFromDisk: () => {
@@ -1155,8 +1191,6 @@ export const useCloudStore = create<CloudStudioState>()(
               nodes,
               edges: project.edges,
               environments: withCurrentEnvironmentColors(project.environments) || state.environments,
-              targetLocalEmulator:
-                typeof project.targetLocalEmulator === 'boolean' ? project.targetLocalEmulator : state.targetLocalEmulator,
               selectedNodeId: nodes.some((n) => n.id === state.selectedNodeId) ? state.selectedNodeId : null,
               selectedEdgeId: null,
               past: [],
@@ -1195,9 +1229,10 @@ export const useCloudStore = create<CloudStudioState>()(
       partialize: (state) => ({
         activeEnv: state.activeEnv,
         environments: state.environments,
-        targetLocalEmulator: state.targetLocalEmulator,
         nodes: state.nodes,
         edges: state.edges,
+        isCatalogOpen: state.isCatalogOpen,
+        isDrawerOpen: state.isDrawerOpen,
       }),
       // Older saves predate VPC / Subnet containers; bring them into the current canvas shape
       merge: (persisted, current) => {
@@ -1222,8 +1257,7 @@ useCloudStore.subscribe((state, prev) => {
   if (
     state.nodes === prev.nodes &&
     state.edges === prev.edges &&
-    state.environments === prev.environments &&
-    state.targetLocalEmulator === prev.targetLocalEmulator
+    state.environments === prev.environments
   ) {
     return;
   }

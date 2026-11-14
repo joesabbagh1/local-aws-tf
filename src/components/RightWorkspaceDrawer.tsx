@@ -6,13 +6,35 @@ import {
   resolveNodeConfigForEnv,
   isFieldOverriddenInEnv,
   EXTRA_HCL_KEY,
+  type CompileTarget,
 } from '../utils/terraformCompiler';
+import { AWS_EXPORT_DIR } from '../utils/awsExport';
+import { emulatorSupport } from '../utils/emulatorSupport';
 import type { EnvironmentId, SchemaField } from '../types/cloud';
 import { RunnerConsole } from './RunnerConsole';
 import { ResourceExplorerPanel } from './ResourceExplorerPanel';
 import { ArchitectureAuditPanel } from './ArchitectureAuditPanel';
 import type { RightDrawerTab } from '../store/useCloudStore';
-import { Copy, Check, RotateCcw, Trash2, Plus, X, ArrowRight, RefreshCw, ExternalLink } from 'lucide-react';
+import {
+  Copy,
+  Check,
+  RotateCcw,
+  Trash2,
+  Plus,
+  X,
+  ArrowRight,
+  RefreshCw,
+  ExternalLink,
+  PanelRightClose,
+  PanelRightOpen,
+  SlidersHorizontal,
+  Layers,
+  FileCode2,
+  SquareTerminal,
+  Database,
+  ShieldCheck,
+  type LucideIcon,
+} from 'lucide-react';
 import {
   Button,
   IconButton,
@@ -29,13 +51,13 @@ import {
 
 const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 
-const DRAWER_TABS: { id: RightDrawerTab; label: string }[] = [
-  { id: 'inspector', label: 'Inspect' },
-  { id: 'env-matrix', label: 'Envs' },
-  { id: 'terraform', label: 'Terraform' },
-  { id: 'emulator', label: 'Run' },
-  { id: 'explorer', label: 'Data' },
-  { id: 'audit', label: 'Audit' },
+const DRAWER_TABS: { id: RightDrawerTab; label: string; icon: LucideIcon }[] = [
+  { id: 'inspector', label: 'Inspect', icon: SlidersHorizontal },
+  { id: 'env-matrix', label: 'Envs', icon: Layers },
+  { id: 'terraform', label: 'Terraform', icon: FileCode2 },
+  { id: 'emulator', label: 'Run', icon: SquareTerminal },
+  { id: 'explorer', label: 'Data', icon: Database },
+  { id: 'audit', label: 'Audit', icon: ShieldCheck },
 ];
 
 const envShort = (envId: EnvironmentId) => (envId === 'testing' ? 'test' : envId);
@@ -43,17 +65,43 @@ const envShort = (envId: EnvironmentId) => (envId === 'testing' ? 'test' : envId
 export function RightWorkspaceDrawer() {
   const rightTab = useCloudStore((s) => s.rightTab);
   const setRightTab = useCloudStore((s) => s.setRightTab);
+  const isOpen = useCloudStore((s) => s.isDrawerOpen);
+  const setOpen = useCloudStore((s) => s.setDrawerOpen);
+
+  if (!isOpen) {
+    return (
+      <aside className="w-10 shrink-0 h-full bg-panel border-l border-line flex flex-col items-center select-none">
+        <div className="h-10 shrink-0 w-full border-b border-line flex items-center justify-center">
+          <IconButton onClick={() => setOpen(true)} title="Show panel (⌘⌥B)">
+            <PanelRightOpen className="w-4 h-4" />
+          </IconButton>
+        </div>
+        <div className="py-2 flex flex-col gap-1">
+          {DRAWER_TABS.map(({ id, label, icon: Icon }) => (
+            <IconButton
+              key={id}
+              onClick={() => setRightTab(id)}
+              title={label}
+              className={cn(rightTab === id && 'text-fg')}
+            >
+              <Icon className="w-4 h-4" />
+            </IconButton>
+          ))}
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside className="w-[400px] shrink-0 h-full bg-panel border-l border-line flex flex-col select-none">
-      <nav className="h-10 shrink-0 px-2 border-b border-line flex items-stretch">
+      <nav className="h-10 shrink-0 pl-2 pr-1.5 border-b border-line flex items-stretch">
         {DRAWER_TABS.map(({ id, label }) => (
           <button
             key={id}
             type="button"
             onClick={() => setRightTab(id)}
             className={cn(
-              'relative px-2.5 text-[13px] transition-colors',
+              'relative px-2.5 text-[14px] transition-colors',
               rightTab === id ? 'text-fg' : 'text-fg-muted hover:text-fg'
             )}
           >
@@ -61,6 +109,9 @@ export function RightWorkspaceDrawer() {
             {rightTab === id && <span className="absolute left-2.5 right-2.5 -bottom-px h-px bg-fg" />}
           </button>
         ))}
+        <IconButton onClick={() => setOpen(false)} title="Hide panel (⌘⌥B)" className="ml-auto self-center">
+          <PanelRightClose className="w-4 h-4" />
+        </IconButton>
       </nav>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -72,6 +123,30 @@ export function RightWorkspaceDrawer() {
         {rightTab === 'audit' && <ArchitectureAuditPanel />}
       </div>
     </aside>
+  );
+}
+
+/** What the emulator test run found for this service. */
+function SupportLine({ support }: { support: ReturnType<typeof emulatorSupport> }) {
+  const text =
+    support.level === 'verified'
+      ? 'Applies and destroys on the emulator'
+      : support.level === 'fails'
+        ? `Fails on the emulator: ${support.errors[0] || 'see npm run test:emulator'}`
+        : 'Not tested on the emulator';
+  return (
+    <div
+      className="text-[12.5px] mt-1 flex items-center gap-1.5 min-w-0"
+      title={[text, ...support.errors.slice(1), support.testedAt ? `Tested ${support.testedAt.slice(0, 10)}` : ''].filter(Boolean).join('\n')}
+    >
+      <span
+        className={cn(
+          'w-1.5 h-1.5 rounded-full shrink-0',
+          support.level === 'verified' ? 'bg-ok' : support.level === 'fails' ? 'bg-warn' : 'bg-fg-faint/50'
+        )}
+      />
+      <span className={cn('truncate', support.level === 'fails' ? 'text-warn' : 'text-fg-faint')}>{text}</span>
+    </div>
   );
 }
 
@@ -136,7 +211,7 @@ function NodeAndEdgeInspector() {
         <div className="px-4 py-4 border-b border-line flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs text-fg-muted">Connection</div>
-            <div className="mt-1 flex items-center gap-2 text-[13px] font-medium text-fg min-w-0">
+            <div className="mt-1 flex items-center gap-2 text-[14px] font-medium text-fg min-w-0">
               <span className="truncate">{srcNode?.data.label || selectedEdge.source}</span>
               <ArrowRight className="w-3.5 h-3.5 text-fg-faint shrink-0" />
               <span className="truncate">{dstNode?.data.label || selectedEdge.target}</span>
@@ -185,7 +260,7 @@ function NodeAndEdgeInspector() {
   if (!selectedNode) {
     return (
       <div className="px-6 py-16 text-center">
-        <p className="text-[13px] text-fg-muted">Select a resource or connection to edit it.</p>
+        <p className="text-[14px] text-fg-muted">Select a resource or connection to edit it.</p>
         <div className="mt-6 inline-grid grid-cols-[auto_auto] gap-x-4 gap-y-2 text-xs text-fg-faint text-left">
           <Kbd>⌘Z</Kbd> <span>Undo</span>
           <Kbd>⌘D</Kbd> <span>Duplicate</span>
@@ -230,8 +305,9 @@ function NodeAndEdgeInspector() {
       <div className="px-4 py-4 border-b border-line flex items-center gap-3">
         <ServiceGlyph iconName={svc?.iconName || 'Server'} color={svc?.color || '#9CA1A4'} size="lg" />
         <div className="min-w-0 flex-1" title={svc?.description}>
-          <div className="text-[14px] font-medium text-fg truncate">{svc?.name || selectedNode.data.label}</div>
-          <div className="text-[11px] font-mono text-fg-faint truncate mt-0.5">{svc?.terraformResourceType}</div>
+          <div className="text-[15px] font-medium text-fg truncate">{svc?.name || selectedNode.data.label}</div>
+          <div className="text-[12.5px] font-mono text-fg-faint truncate mt-0.5">{svc?.terraformResourceType}</div>
+          <SupportLine support={emulatorSupport(svc)} />
         </div>
         <div className="flex items-center shrink-0">
           <IconButton onClick={() => duplicateNode(selectedNode.id)} title="Duplicate (⌘D)">
@@ -326,7 +402,7 @@ function NodeAndEdgeInspector() {
             { value: 'base', label: 'All environments' },
           ]}
         />
-        <p className="text-[11px] text-fg-faint mt-2 mb-4">
+        <p className="text-[12.5px] text-fg-faint mt-2 mb-4">
           {editScope === 'env' ? (
             <>
               Edits override the base value in <span className="font-mono">{activeEnv}.tfvars</span> only.
@@ -441,47 +517,81 @@ function NodeAndEdgeInspector() {
           rows={4}
           spellCheck={false}
           placeholder={'publish = true\n\nlifecycle {\n  prevent_destroy = true\n}'}
-          className={cn(monoFieldCls, 'p-3 text-[11.5px] leading-relaxed resize-y')}
+          className={cn(monoFieldCls, 'p-3 text-[13px] leading-relaxed resize-y')}
         />
-        <p className="text-[11px] text-fg-faint mt-2">
+        <p className="text-[12.5px] text-fg-faint mt-2">
           Added inside the <span className="font-mono">{svc?.terraformResourceType}</span> block as written, for{' '}
           {editScope === 'env' ? `${envShort(activeEnv)} only` : 'all environments'}. Don't repeat arguments the
           form already sets.
         </p>
       </Section>
 
-      {/* Lambda handler source, zipped into artifacts/<name>.zip on every sync */}
+      {/* Lambda code: inline, or a folder in the project zipped as-is (dependencies included) */}
       {selectedNode.data.serviceType === 'aws_lambda_function' && (
         <Section
-          title="Handler code"
+          title="Code"
           aside={
-            <span className="text-[11px] font-mono text-fg-faint">
-              {String(resolvedConfig.handler || 'index.handler').split('.').slice(0, -1).join('.') || 'index'}.
-              {String(resolvedConfig.runtime || 'nodejs20.x').startsWith('python') ? 'py' : 'mjs'}
+            <span className="text-[12.5px] font-mono text-fg-faint">
+              handler {String(resolvedConfig.handler || 'index.handler')}
             </span>
           }
         >
-          <textarea
-            value={selectedNode.data.inlineCode || ''}
-            onChange={(e) => updateNodeMetadata(selectedNode.id, { inlineCode: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key !== 'Tab') return;
-              e.preventDefault();
-              const el = e.currentTarget;
-              const { selectionStart, selectionEnd, value } = el;
-              const next = `${value.slice(0, selectionStart)}  ${value.slice(selectionEnd)}`;
-              updateNodeMetadata(selectedNode.id, { inlineCode: next });
-              requestAnimationFrame(() => el.setSelectionRange(selectionStart + 2, selectionStart + 2));
-            }}
-            rows={12}
-            spellCheck={false}
-            placeholder="Leave empty to deploy a default echo handler"
-            className={cn(monoFieldCls, 'p-3 text-[11.5px] leading-relaxed resize-y')}
+          <Segmented
+            value={selectedNode.data.sourceDir === undefined ? 'inline' : 'folder'}
+            onChange={(mode) =>
+              updateNodeMetadata(selectedNode.id, { sourceDir: mode === 'folder' ? selectedNode.data.sourceDir ?? '' : undefined })
+            }
+            options={[
+              { value: 'inline', label: 'Inline' },
+              { value: 'folder', label: 'Folder' },
+            ]}
+            className="mb-3"
           />
-          <p className="text-[11px] text-fg-faint mt-2">
-            Shared by every environment. Zipped into{' '}
-            <span className="font-mono">environments/&lt;env&gt;/artifacts/</span> on sync and apply.
-          </p>
+          {selectedNode.data.sourceDir === undefined ? (
+            <>
+              <textarea
+                value={selectedNode.data.inlineCode || ''}
+                onChange={(e) => updateNodeMetadata(selectedNode.id, { inlineCode: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Tab') return;
+                  e.preventDefault();
+                  const el = e.currentTarget;
+                  const { selectionStart, selectionEnd, value } = el;
+                  const next = `${value.slice(0, selectionStart)}  ${value.slice(selectionEnd)}`;
+                  updateNodeMetadata(selectedNode.id, { inlineCode: next });
+                  requestAnimationFrame(() => el.setSelectionRange(selectionStart + 2, selectionStart + 2));
+                }}
+                rows={12}
+                spellCheck={false}
+                placeholder="Leave empty to deploy a default echo handler"
+                className={cn(monoFieldCls, 'p-3 text-[13px] leading-relaxed resize-y')}
+              />
+              <p className="text-[12.5px] text-fg-faint mt-2">
+                Saved as{' '}
+                <span className="font-mono">
+                  {String(resolvedConfig.handler || 'index.handler').split('.').slice(0, -1).join('.') || 'index'}.
+                  {String(resolvedConfig.runtime || 'nodejs20.x').startsWith('python') ? 'py' : 'mjs'}
+                </span>{' '}
+                and zipped on sync and apply. One file, no dependencies.
+              </p>
+            </>
+          ) : (
+            <>
+              <input
+                type="text"
+                value={selectedNode.data.sourceDir}
+                placeholder="functions/orders"
+                spellCheck={false}
+                onChange={(e) => updateNodeMetadata(selectedNode.id, { sourceDir: e.target.value })}
+                className={monoFieldCls}
+              />
+              <p className={cn('text-[12.5px] mt-2 leading-relaxed', selectedNode.data.sourceDir.trim() ? 'text-fg-faint' : 'text-warn')}>
+                {selectedNode.data.sourceDir.trim()
+                  ? 'Relative to the project folder. Zipped as-is on sync, apply and export, including node_modules or vendored packages, so build or install first. The handler is a path inside it.'
+                  : 'Set a folder relative to the project. Until then the inline code is used.'}
+              </p>
+            </>
+          )}
         </Section>
       )}
 
@@ -499,7 +609,7 @@ function NodeAndEdgeInspector() {
             {Object.entries(selectedNode.data.provisionedOutputs[activeEnv]!).map(([k, v]) => (
               <div key={k} className="grid grid-cols-[112px_minmax(0,1fr)] gap-3 text-xs">
                 <dt className="text-fg-muted truncate">{k}</dt>
-                <dd className="font-mono text-[11px] text-fg break-all select-text">{v}</dd>
+                <dd className="font-mono text-[12.5px] text-fg break-all select-text">{v}</dd>
               </div>
             ))}
           </dl>
@@ -572,7 +682,7 @@ function MultiEnvMatrixPanel() {
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) || nodes[0];
   const svc = selectedNode ? SERVICE_BY_TYPE[selectedNode.data.serviceType] : null;
 
-  const th = 'h-8 px-2 text-left text-[11px] font-normal text-fg-faint';
+  const th = 'h-8 px-2 text-left text-[12.5px] font-normal text-fg-faint';
 
   return (
     <>
@@ -597,7 +707,7 @@ function MultiEnvMatrixPanel() {
                       type="button"
                       onClick={() => setActiveEnv(envId)}
                       className={cn(
-                        'flex items-center gap-2 text-[13px]',
+                        'flex items-center gap-2 text-[14px]',
                         isActive ? 'text-fg' : 'text-fg-muted hover:text-fg'
                       )}
                     >
@@ -609,7 +719,7 @@ function MultiEnvMatrixPanel() {
                     <select
                       value={env.region}
                       onChange={(e) => updateEnvironmentProfile(envId, { region: e.target.value })}
-                      className={cn(monoFieldCls, 'py-1 text-[11px]')}
+                      className={cn(monoFieldCls, 'py-1 text-[12.5px]')}
                     >
                       <option value="us-east-1">us-east-1</option>
                       <option value="us-west-2">us-west-2</option>
@@ -628,7 +738,7 @@ function MultiEnvMatrixPanel() {
                           emulatorEndpoint: `https://127.0.0.1:${p}`,
                         });
                       }}
-                      className={cn(monoFieldCls, 'py-1 text-[11px]')}
+                      className={cn(monoFieldCls, 'py-1 text-[12.5px]')}
                     />
                   </td>
                 </tr>
@@ -690,7 +800,7 @@ function MultiEnvMatrixPanel() {
                         >
                           <EnvDot color={environments[envId].color} hollow={!enabled} className="w-1.5 h-1.5" />
                           {enabled && overridesCount > 0 && (
-                            <span className="text-[10px] font-mono text-accent">{overridesCount}</span>
+                            <span className="text-[11.5px] font-mono text-accent">{overridesCount}</span>
                           )}
                         </button>
                       </td>
@@ -701,7 +811,7 @@ function MultiEnvMatrixPanel() {
             })}
           </tbody>
         </table>
-        <p className="text-[11px] text-fg-faint mt-3">
+        <p className="text-[12.5px] text-fg-faint mt-3">
           Click a dot to turn a resource on or off. Numbers count overridden parameters.
         </p>
       </Section>
@@ -710,7 +820,7 @@ function MultiEnvMatrixPanel() {
       {selectedNode && svc && (
         <Section title={`Compare · ${selectedNode.data.label}`}>
           <div className="overflow-x-auto -mx-1">
-            <table className="w-full border-collapse font-mono text-[11px]">
+            <table className="w-full border-collapse font-mono text-[12.5px]">
               <thead>
                 <tr className="border-b border-line">
                   <th className={cn(th, 'font-sans')}>Parameter</th>
@@ -773,30 +883,41 @@ function HclLine({ line }: { line: string }) {
   return <>{line || ' '}</>;
 }
 
+// Short labels so the AWS set fits; the full path is shown above the tabs
+const TERRAFORM_FILES = [
+  { id: 'main.tf', label: 'main' },
+  { id: 'provider.tf', label: 'provider' },
+  { id: 'backend', label: 'backend', awsOnly: true },
+  { id: 'tfvars', label: 'tfvars' },
+  { id: 'variables.tf', label: 'variables' },
+  { id: 'outputs.tf', label: 'outputs' },
+] as const;
+
+type TerraformFile = (typeof TERRAFORM_FILES)[number]['id'];
+
 function LiveTerraformPanel() {
   const nodes = useCloudStore((s) => s.nodes);
   const edges = useCloudStore((s) => s.edges);
   const activeEnv = useCloudStore((s) => s.activeEnv);
   const environments = useCloudStore((s) => s.environments);
-  const targetLocalEmulator = useCloudStore((s) => s.targetLocalEmulator);
+  const setExportModalOpen = useCloudStore((s) => s.setExportModalOpen);
 
-  const [selectedFile, setSelectedFile] = useState<
-    'main.tf' | 'provider.tf' | 'tfvars' | 'variables.tf' | 'outputs.tf'
-  >('main.tf');
+  // Preview either what runs locally or what Export for AWS writes
+  const [target, setTarget] = useState<CompileTarget>('emulator');
+  const [selectedFile, setSelectedFile] = useState<TerraformFile>('main.tf');
   const [copied, setCopied] = useState(false);
 
   const compiled = useMemo(() => {
-    return compileTerraformForEnvironment(
-      nodes,
-      edges,
-      environments[activeEnv],
-      environments,
-      targetLocalEmulator
-    );
-  }, [nodes, edges, activeEnv, environments, targetLocalEmulator]);
+    return compileTerraformForEnvironment(nodes, edges, environments[activeEnv], environments, target);
+  }, [nodes, edges, activeEnv, environments, target]);
+
+  const files = TERRAFORM_FILES.filter((f) => target === 'aws' || !('awsOnly' in f));
+  const file = files.some((f) => f.id === selectedFile) ? selectedFile : 'main.tf';
 
   const codeContent = useMemo(() => {
-    switch (selectedFile) {
+    switch (file) {
+      case 'backend':
+        return `# ---- backend.tf ----\n\n${compiled.backendTf}\n# ---- backend.tfbackend ----\n\n${compiled.backendConfig}`;
       case 'main.tf':
         return compiled.mainTf;
       case 'provider.tf':
@@ -808,7 +929,7 @@ function LiveTerraformPanel() {
       case 'outputs.tf':
         return compiled.outputsTf;
     }
-  }, [selectedFile, compiled]);
+  }, [file, compiled]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(codeContent);
@@ -821,9 +942,26 @@ function LiveTerraformPanel() {
   return (
     <div className="flex flex-col h-full">
       <div className="shrink-0 border-b border-line">
+        <div className="px-4 pt-3 flex items-center gap-2">
+          <Segmented
+            value={target}
+            onChange={setTarget}
+            className="flex-1"
+            options={[
+              { value: 'emulator', label: 'Emulator' },
+              { value: 'aws', label: 'AWS export' },
+            ]}
+          />
+          {target === 'aws' && (
+            <Button onClick={() => setExportModalOpen(true)} className="shrink-0">
+              Export…
+            </Button>
+          )}
+        </div>
         <div className="h-9 px-4 flex items-center justify-between">
-          <span className="text-[11px] font-mono text-fg-faint truncate">
-            terraform-out/environments/{activeEnv}/{selectedFile === 'tfvars' ? `${activeEnv}.tfvars` : selectedFile}
+          <span className="text-[12.5px] font-mono text-fg-faint truncate">
+            {target === 'aws' ? AWS_EXPORT_DIR : 'terraform-out'}/environments/{activeEnv}/
+            {file === 'tfvars' ? `${activeEnv}.tfvars` : file === 'backend' ? 'backend.tf, backend.tfbackend' : file}
           </span>
           <Button variant="ghost" onClick={handleCopy} className="-mr-2">
             {copied ? <Check className="w-3.5 h-3.5 text-ok" /> : <Copy className="w-3.5 h-3.5" />}
@@ -831,32 +969,24 @@ function LiveTerraformPanel() {
           </Button>
         </div>
         <div className="px-2 flex items-stretch overflow-x-auto">
-          {(
-            [
-              { id: 'main.tf', label: 'main.tf' },
-              { id: 'provider.tf', label: 'provider.tf' },
-              { id: 'tfvars', label: 'tfvars' },
-              { id: 'variables.tf', label: 'variables.tf' },
-              { id: 'outputs.tf', label: 'outputs.tf' },
-            ] as const
-          ).map((f) => (
+          {files.map((f) => (
             <button
               key={f.id}
               type="button"
               onClick={() => setSelectedFile(f.id)}
               className={cn(
-                'relative h-8 px-1.5 text-[11px] font-mono shrink-0 transition-colors',
-                selectedFile === f.id ? 'text-fg' : 'text-fg-faint hover:text-fg-muted'
+                'relative h-8 px-1.5 text-[12.5px] font-mono shrink-0 transition-colors',
+                file === f.id ? 'text-fg' : 'text-fg-faint hover:text-fg-muted'
               )}
             >
               {f.label}
-              {selectedFile === f.id && <span className="absolute left-1.5 right-1.5 -bottom-px h-px bg-fg" />}
+              {file === f.id && <span className="absolute left-1.5 right-1.5 -bottom-px h-px bg-fg" />}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-base py-3 font-mono text-[11.5px] leading-[1.7] select-text">
+      <div className="flex-1 overflow-auto bg-base py-3 font-mono text-[13px] leading-[1.7] select-text">
         <pre className="text-fg/90">
           {lines.map((line, i) => (
             <div key={i} className="flex">
@@ -889,13 +1019,7 @@ function AwsEmulatorCommandCenter() {
   const envProfile = environments[activeEnv];
   const compiled = useMemo(
     () =>
-      compileTerraformForEnvironment(
-        nodes,
-        edges,
-        envProfile,
-        environments,
-        true
-      ),
+      compileTerraformForEnvironment(nodes, edges, envProfile, environments),
     [nodes, edges, envProfile, environments]
   );
 
@@ -945,7 +1069,7 @@ function AwsEmulatorCommandCenter() {
               <div key={id} className="h-8 flex items-center gap-2.5 text-xs">
                 <EnvDot color={env.color} />
                 <span className={id === activeEnv ? 'text-fg' : 'text-fg-muted'}>{env.name}</span>
-                <span className="font-mono text-[11px] text-fg-faint">:{env.emulatorPort}</span>
+                <span className="font-mono text-[12.5px] text-fg-faint">:{env.emulatorPort}</span>
                 <span className={cn('ml-auto flex items-center gap-1.5', isOnline ? 'text-fg-muted' : 'text-fg-faint')}>
                   <span className={cn('w-1.5 h-1.5 rounded-full', isOnline ? 'bg-ok' : 'bg-fg-faint/50')} />
                   {isOnline ? 'running' : 'stopped'}
@@ -954,7 +1078,7 @@ function AwsEmulatorCommandCenter() {
             );
           })}
         </div>
-        <p className="text-[11px] text-fg-faint mt-3">
+        <p className="text-[12.5px] text-fg-faint mt-3">
           Each emulator serves HTTPS with a local CA in{' '}
           <span className="font-mono">~/.aws/emulator/&lt;port&gt;/</span>.
         </p>
@@ -979,7 +1103,7 @@ function AwsEmulatorCommandCenter() {
             { value: 'dockerfile', label: 'Dockerfile' },
           ]}
         />
-        <pre className="mt-3 rounded-md border border-line bg-base p-3 font-mono text-[11px] leading-relaxed text-fg/90 select-text overflow-x-auto max-h-96">
+        <pre className="mt-3 rounded-md border border-line bg-base p-3 font-mono text-[12.5px] leading-relaxed text-fg/90 select-text overflow-x-auto max-h-96">
           {activeSnippet}
         </pre>
       </Section>

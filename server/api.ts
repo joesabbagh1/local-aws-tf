@@ -16,14 +16,16 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
  */
 
 export const PROJECT_FILE = 'localcloud.json';
+/** Output folders per compile target: terraform-out runs on the emulator, terraform-aws is the export. */
+const OUTPUT_DIRS = { emulator: 'terraform-out', aws: 'terraform-aws' } as const;
 const PLAN_FILE = '.localcloud.tfplan';
 
 const ENV_IDS = new Set(['dev', 'testing', 'staging', 'prod']);
 const TERRAFORM_COMMANDS = new Set(['init', 'validate', 'plan', 'apply', 'destroy']);
 
-type EmulatorHealth = { running: boolean; status: string; caExists: boolean };
+export type EmulatorHealth = { running: boolean; status: string; caExists: boolean };
 
-function checkEmulatorHealth(port: number): Promise<EmulatorHealth> {
+export function checkEmulatorHealth(port: number): Promise<EmulatorHealth> {
   return new Promise((resolve) => {
     const caPath = path.join(os.homedir(), '.aws', 'emulator', String(port), 'ca.pem');
     const caExists = fs.existsSync(caPath);
@@ -116,7 +118,7 @@ function runCommand(
   });
 }
 
-function getEmulatorAwsEnv(port: number, region = 'us-east-1'): NodeJS.ProcessEnv {
+export function getEmulatorAwsEnv(port: number, region = 'us-east-1'): NodeJS.ProcessEnv {
   const home = os.homedir();
   const baseDir = path.join(home, '.aws', 'emulator', String(port));
   const env: NodeJS.ProcessEnv = {
@@ -247,6 +249,166 @@ async function runExplorerOperation(
 }
 
 
+export interface LambdaArtifactRequest {
+  envId: string;
+  resourceName: string;
+  runtime: string;
+  handler: string;
+  /** Inline handler source, used when sourceDir is empty. */
+  code?: string;
+  /** Folder (relative to the project) zipped as-is: handler files plus any dependencies. */
+  sourceDir?: string;
+}
+
+const FIXED_MTIME = new Date('2000-01-01T00:00:00Z');
+const ZIP_EXCLUDES = new Set(['.git', '.DS_Store', '.terraform']);
+
+/** Copies a folder, skipping VCS / OS clutter, with every mtime fixed so the zip depends on content only. */
+function copyNormalized(from: string, to: string) {
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (ZIP_EXCLUDES.has(entry.name)) continue;
+    const src = path.join(from, entry.name);
+    const dst = path.join(to, entry.name);
+    if (entry.isDirectory()) copyNormalized(src, dst);
+    else if (entry.isFile()) {
+      fs.copyFileSync(src, dst);
+      fs.chmodSync(dst, fs.statSync(src).mode & 0o777);
+      fs.utimesSync(dst, FIXED_MTIME, FIXED_MTIME);
+    }
+    // symlinks are skipped: Lambda zips should be self-contained
+  }
+  fs.utimesSync(to, FIXED_MTIME, FIXED_MTIME);
+}
+
+/**
+ * Writes <envDir>/artifacts/<name>_src and zips it to <envDir>/artifacts/<name>.zip, the file
+ * main.tf points at. Identical input always gives a byte-identical zip, so source_code_hash only
+ * changes when the code does. Returns an error message instead of throwing.
+ */
+export async function buildLambdaArtifact(
+  envDir: string,
+  projectDir: string,
+  art: LambdaArtifactRequest
+): Promise<{ zipPath?: string; error?: string }> {
+  const resourceName = String(art.resourceName || '');
+  if (!/^[a-z0-9_]+$/.test(resourceName)) return { error: `Invalid Lambda resource name "${resourceName}"` };
+
+  const artDir = path.join(envDir, 'artifacts');
+  const srcDir = path.join(artDir, `${resourceName}_src`);
+  fs.rmSync(srcDir, { recursive: true, force: true });
+
+  const sourceDir = String(art.sourceDir || '').trim();
+  if (sourceDir) {
+    const from = path.resolve(projectDir, sourceDir);
+    if (from !== projectDir && !from.startsWith(projectDir + path.sep)) {
+      return { error: `${resourceName}: code folder "${sourceDir}" is outside the project` };
+    }
+    if (!fs.existsSync(from) || !fs.statSync(from).isDirectory()) {
+      return { error: `${resourceName}: code folder "${sourceDir}" does not exist` };
+    }
+    copyNormalized(from, srcDir);
+  } else {
+    fs.mkdirSync(srcDir, { recursive: true });
+    // The handler setting (e.g. "dist/orders.handler") decides where the entry file lives in the zip
+    const ext = String(art.runtime).startsWith('python') ? 'py' : 'mjs';
+    const handlerModule = String(art.handler || 'index.handler').split('.').slice(0, -1).join('.');
+    const modulePath = /^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/.test(handlerModule) ? handlerModule : 'index';
+    const entryFile = path.join(srcDir, `${modulePath}.${ext}`);
+    fs.mkdirSync(path.dirname(entryFile), { recursive: true });
+    const defaultHandlerCode =
+      ext === 'py'
+        ? `import json\ndef handler(event, context):\n    return {"statusCode": 200, "body": json.dumps({"ok": True, "resource": "${resourceName}", "env": "${art.envId}"})}\n`
+        : `export const handler = async (event) => {\n  return {\n    statusCode: 200,\n    headers: { "content-type": "application/json" },\n    body: JSON.stringify({ ok: true, resource: "${resourceName}", env: "${art.envId}", event }),\n  };\n};\n`;
+    fs.writeFileSync(entryFile, art.code || defaultHandlerCode, 'utf-8');
+    fs.utimesSync(entryFile, FIXED_MTIME, FIXED_MTIME);
+    for (let dir = path.dirname(entryFile); dir.startsWith(srcDir); dir = path.dirname(dir)) {
+      fs.utimesSync(dir, FIXED_MTIME, FIXED_MTIME);
+    }
+  }
+
+  const zipPath = path.join(artDir, `${resourceName}.zip`);
+  fs.rmSync(zipPath, { force: true });
+  const zipped = await runCommand('zip', ['-q', '-X', '-r', zipPath, '.'], { cwd: srcDir, timeout: 300000 });
+  if (!zipped.ok) return { error: `${resourceName}: zip failed: ${zipped.stderr.trim()}` };
+  return { zipPath };
+}
+
+export const EMULATOR_IMAGE = 'aws-emulator:local';
+
+/** Builds the emulator image if needed and (re)starts one container on 127.0.0.1:<port>. */
+export async function startEmulatorContainer(
+  containerName: string,
+  port: number,
+  workDir: string
+): Promise<{ ok: boolean; output: string; error?: string }> {
+  const home = os.homedir();
+  const emulatorHostDir = path.join(home, '.aws', 'emulator');
+  fs.mkdirSync(emulatorHostDir, { recursive: true });
+  fs.mkdirSync(workDir, { recursive: true });
+
+  const dockerfilePath = path.join(workDir, 'Dockerfile.emulator');
+  const arch = os.arch() === 'arm64' ? 'aarch64' : 'x86_64';
+  fs.writeFileSync(
+    dockerfilePath,
+    `FROM public.ecr.aws/amazonlinux/amazonlinux:2023-minimal
+ADD https://downloads.aws.com/aws-emulator/packages/aws-emulator/LTS/latest/aws-emulator-${arch}.rpm /tmp/aws-emulator.rpm
+RUN rpm -i /tmp/aws-emulator.rpm && rm /tmp/aws-emulator.rpm \\
+    && mkdir -p /home/emulator && chown 1000 /home/emulator
+USER 1000
+ENV HOME=/home/emulator
+ENTRYPOINT ["aws-emulator", "-b", "0.0.0.0"]
+`,
+    'utf-8'
+  );
+
+  let buildLogs = '';
+  const imgCheck = await runCommand('docker', ['image', 'inspect', EMULATOR_IMAGE]);
+  if (!imgCheck.ok) {
+    const buildRes = await runCommand('docker', ['build', '-t', EMULATOR_IMAGE, '-f', dockerfilePath, workDir], {
+      timeout: 300000,
+    });
+    buildLogs = `${buildRes.stdout}\n${buildRes.stderr}`;
+    if (!buildRes.ok) {
+      return { ok: false, output: buildLogs, error: 'Docker build failed (is Docker Desktop running?)' };
+    }
+  }
+
+  await runCommand('docker', ['rm', '-f', containerName]);
+  const runRes = await runCommand('docker', [
+    'run', '-d', '--rm',
+    '--name', containerName,
+    '--memory=2g', '--memory-swap=2g',
+    '-p', `127.0.0.1:${port}:${port}`,
+    '-e', `HOME=${home}`,
+    '-v', `${emulatorHostDir}:${emulatorHostDir}`,
+    EMULATOR_IMAGE,
+    '-p', String(port),
+    '--telemetry', 'off',
+  ]);
+  return { ok: runRes.ok, output: (buildLogs ? `${buildLogs}\n` : '') + (runRes.stdout || runRes.stderr) };
+}
+
+export async function stopEmulatorContainer(containerName: string) {
+  return runCommand('docker', ['rm', '-f', containerName]);
+}
+
+/**
+ * Known emulator gap: for a security group in a VPC the emulator doesn't create AWS's default egress
+ * rule, so the provider's step that removes it fails and Terraform marks the (existing) group tainted.
+ * Returns the addresses of groups that failed only for that reason, from plain-text apply output.
+ */
+export function securityGroupEgressQuirks(applyOutput: string): string[] {
+  const addresses = new Set<string>();
+  for (const chunk of applyOutput.split(/(?=Error: )/)) {
+    if (!/^Error: revoking default IPv[46] egress rule for Security Group/.test(chunk)) continue;
+    if (!/InvalidPermission\.NotFound/.test(chunk)) continue;
+    const addr = /\bwith (aws_security_group\.[A-Za-z0-9_-]+)/.exec(chunk)?.[1];
+    if (addr) addresses.add(addr);
+  }
+  return [...addresses];
+}
+
 const LOCAL_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 /**
@@ -303,7 +465,7 @@ type Handler = (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<
 
 export function createApiMiddleware(options: { projectDir?: string } = {}) {
   const projectDir = path.resolve(options.projectDir || process.cwd());
-  const OUT_DIR = path.join(projectDir, 'terraform-out');
+  const OUT_DIR = path.join(projectDir, OUTPUT_DIRS.emulator);
   const projectFilePath = path.join(projectDir, PROJECT_FILE);
 
   const routes: Record<string, Handler> = {
@@ -354,65 +516,56 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
       }
     },
 
-    // 3. Write Terraform files + package Lambda zip artifacts
+    // 3. Write Terraform files + package Lambda zip artifacts, for the emulator (Sync) or the AWS export
     '/api/terraform/export': async (req, res) => {
       if (req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed' }, 405);
 
       try {
         const payload = await readJsonBody(req);
-        fs.mkdirSync(OUT_DIR, { recursive: true });
+        const target = payload.target === 'aws' ? 'aws' : 'emulator';
+        const baseDir = path.join(projectDir, OUTPUT_DIRS[target]);
+        fs.mkdirSync(baseDir, { recursive: true });
 
         const writtenFiles: string[] = [];
-        if (payload.files && typeof payload.files === 'object') {
-          for (const [relPath, content] of Object.entries(payload.files)) {
-            const safePath = path.resolve(OUT_DIR, relPath);
-            if (!safePath.startsWith(OUT_DIR + path.sep)) continue;
+        const keptFiles: string[] = [];
+        const writeFiles = (files: unknown, onlyIfMissing: boolean) => {
+          if (!files || typeof files !== 'object') return;
+          for (const [relPath, content] of Object.entries(files)) {
+            const safePath = path.resolve(baseDir, relPath);
+            if (!safePath.startsWith(baseDir + path.sep)) continue;
+            if (onlyIfMissing && fs.existsSync(safePath)) {
+              keptFiles.push(path.relative(projectDir, safePath));
+              continue;
+            }
             fs.mkdirSync(path.dirname(safePath), { recursive: true });
             fs.writeFileSync(safePath, String(content), 'utf-8');
             if (relPath.endsWith('.sh')) fs.chmodSync(safePath, 0o755);
             writtenFiles.push(safePath);
           }
-        }
+        };
+        writeFiles(payload.files, false);
+        // Files the user edits after the first export (backend settings) are created once, then left alone
+        writeFiles(payload.filesIfMissing, true);
 
+        const errors: string[] = [];
         if (Array.isArray(payload.lambdaArtifacts)) {
-          for (const art of payload.lambdaArtifacts) {
+          for (const art of payload.lambdaArtifacts as LambdaArtifactRequest[]) {
             const envId = parseEnvId(art.envId);
-            const resourceName = String(art.resourceName || '');
-            if (!envId || !/^[a-z0-9_]+$/.test(resourceName)) continue;
-
-            const artDir = path.join(OUT_DIR, 'environments', envId, 'artifacts');
-            const srcDir = path.join(artDir, `${resourceName}_src`);
-            fs.rmSync(srcDir, { recursive: true, force: true });
-            fs.mkdirSync(srcDir, { recursive: true });
-
-            // The handler setting (e.g. "dist/orders.handler") decides where the entry file lives in the zip
-            const ext = String(art.runtime).startsWith('python') ? 'py' : 'mjs';
-            const handlerModule = String(art.handler || 'index.handler').split('.').slice(0, -1).join('.');
-            const modulePath =
-              /^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/.test(handlerModule) ? handlerModule : 'index';
-            const entryFile = path.join(srcDir, `${modulePath}.${ext}`);
-            fs.mkdirSync(path.dirname(entryFile), { recursive: true });
-            const defaultHandlerCode =
-              ext === 'py'
-                ? `import json\ndef handler(event, context):\n    return {"statusCode": 200, "body": json.dumps({"ok": True, "resource": "${resourceName}", "env": "${envId}"})}\n`
-                : `export const handler = async (event) => {\n  return {\n    statusCode: 200,\n    headers: { "content-type": "application/json" },\n    body: JSON.stringify({ ok: true, resource: "${resourceName}", env: "${envId}", event }),\n  };\n};\n`;
-
-            fs.writeFileSync(entryFile, art.code || defaultHandlerCode, 'utf-8');
-            // A fixed mtime and no extra attributes keep the zip byte-identical for identical code,
-            // so source_code_hash only changes when the handler does
-            const epoch = new Date('2000-01-01T00:00:00Z');
-            fs.utimesSync(entryFile, epoch, epoch);
-            for (let dir = path.dirname(entryFile); dir.startsWith(srcDir); dir = path.dirname(dir)) {
-              fs.utimesSync(dir, epoch, epoch);
-            }
-            const zipPath = path.join(artDir, `${resourceName}.zip`);
-            fs.rmSync(zipPath, { force: true });
-            await runCommand('zip', ['-q', '-X', '-r', zipPath, '.'], { cwd: srcDir });
-            writtenFiles.push(zipPath);
+            if (!envId) continue;
+            const built = await buildLambdaArtifact(path.join(baseDir, 'environments', envId), projectDir, art);
+            if (built.zipPath) writtenFiles.push(built.zipPath);
+            if (built.error) errors.push(`[${envId}] ${built.error}`);
           }
         }
 
-        sendJson(res, { ok: true, outDir: OUT_DIR, writtenFiles, timestamp: new Date().toISOString() });
+        sendJson(res, {
+          ok: true,
+          outDir: OUTPUT_DIRS[target],
+          writtenFiles,
+          keptFiles,
+          errors,
+          timestamp: new Date().toISOString(),
+        });
       } catch (err: any) {
         sendJson(res, { ok: false, error: err?.message || 'Failed to write Terraform files' }, 500);
       }
@@ -429,12 +582,9 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
         if (!envId || !port) return sendJson(res, { ok: false, error: 'Invalid envId or port' }, 400);
 
         const containerName = `localcloud-aws-emulator-${envId}`;
-        const home = os.homedir();
-        const emulatorHostDir = path.join(home, '.aws', 'emulator');
-        fs.mkdirSync(emulatorHostDir, { recursive: true });
 
         if (body.action === 'stop') {
-          const result = await runCommand('docker', ['rm', '-f', containerName]);
+          const result = await stopEmulatorContainer(containerName);
           return sendJson(res, { ok: true, action: 'stop', output: result.stdout || result.stderr });
         }
 
@@ -442,59 +592,8 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
           return sendJson(res, { ok: false, error: `Unknown action: ${body.action}` }, 400);
         }
 
-        fs.mkdirSync(OUT_DIR, { recursive: true });
-        const dockerfilePath = path.join(OUT_DIR, 'Dockerfile.emulator');
-        const arch = os.arch() === 'arm64' ? 'aarch64' : 'x86_64';
-        fs.writeFileSync(
-          dockerfilePath,
-          `FROM public.ecr.aws/amazonlinux/amazonlinux:2023-minimal
-ADD https://downloads.aws.com/aws-emulator/packages/aws-emulator/LTS/latest/aws-emulator-${arch}.rpm /tmp/aws-emulator.rpm
-RUN rpm -i /tmp/aws-emulator.rpm && rm /tmp/aws-emulator.rpm \\
-    && mkdir -p /home/emulator && chown 1000 /home/emulator
-USER 1000
-ENV HOME=/home/emulator
-ENTRYPOINT ["aws-emulator", "-b", "0.0.0.0"]
-`,
-          'utf-8'
-        );
-
-        let buildLogs = '';
-        const imgCheck = await runCommand('docker', ['image', 'inspect', 'aws-emulator:local']);
-        if (!imgCheck.ok) {
-          const buildRes = await runCommand(
-            'docker',
-            ['build', '-t', 'aws-emulator:local', '-f', dockerfilePath, OUT_DIR],
-            { timeout: 300000 }
-          );
-          buildLogs = `${buildRes.stdout}\n${buildRes.stderr}`;
-          if (!buildRes.ok) {
-            return sendJson(res, {
-              ok: false,
-              error: 'Docker build failed (is Docker Desktop running?)',
-              output: buildLogs,
-            });
-          }
-        }
-
-        await runCommand('docker', ['rm', '-f', containerName]);
-        const runRes = await runCommand('docker', [
-          'run', '-d', '--rm',
-          '--name', containerName,
-          '--memory=2g', '--memory-swap=2g',
-          '-p', `127.0.0.1:${port}:${port}`,
-          '-e', `HOME=${home}`,
-          '-v', `${emulatorHostDir}:${emulatorHostDir}`,
-          'aws-emulator:local',
-          '-p', String(port),
-          '--telemetry', 'off',
-        ]);
-
-        sendJson(res, {
-          ok: runRes.ok,
-          containerName,
-          port,
-          output: (buildLogs ? `${buildLogs}\n` : '') + (runRes.stdout || runRes.stderr),
-        });
+        const started = await startEmulatorContainer(containerName, port, OUT_DIR);
+        sendJson(res, { ok: started.ok, containerName, port, output: started.output, error: started.error });
       } catch (err: any) {
         sendJson(res, { ok: false, error: err?.message }, 500);
       }
@@ -560,14 +659,19 @@ ENTRYPOINT ["aws-emulator", "-b", "0.0.0.0"]
         active?.kill('SIGINT');
       });
 
+      let applyOutput = '';
       for (const args of steps) {
         if (aborted) return;
         res.write(`$ terraform ${args.join(' ')}\n`);
         const code = await new Promise<number>((resolve) => {
           const child = spawn('terraform', args, { cwd: envDir, env: awsEnv });
           active = child;
-          child.stdout.on('data', (chunk) => res.write(chunk));
-          child.stderr.on('data', (chunk) => res.write(chunk));
+          const forward = (chunk: Buffer) => {
+            res.write(chunk);
+            if (args[0] === 'apply') applyOutput += chunk.toString();
+          };
+          child.stdout.on('data', forward);
+          child.stderr.on('data', forward);
           child.on('error', (err) => {
             res.write(`${err.message}\n`);
             resolve(127);
@@ -576,7 +680,18 @@ ENTRYPOINT ["aws-emulator", "-b", "0.0.0.0"]
         });
         active = null;
         if (code !== 0) {
-          if (command === 'apply') fs.rmSync(planPath, { force: true });
+          if (command === 'apply') {
+            fs.rmSync(planPath, { force: true });
+            const quirks = securityGroupEgressQuirks(applyOutput);
+            for (const addr of quirks) {
+              const untainted = await runCommand('terraform', ['untaint', '-no-color', addr], { cwd: envDir, env: awsEnv });
+              res.write(
+                untainted.ok
+                  ? `\nNote: ${addr} exists, but the emulator doesn't create AWS's default egress rule for security groups in a VPC, so Terraform marked it failed. LocalCloud marked it usable again. Apply again to create the rest.\n`
+                  : `\nCould not untaint ${addr}: ${untainted.stderr.trim()}\n`
+              );
+            }
+          }
           return finish(code);
         }
       }
@@ -589,18 +704,28 @@ ENTRYPOINT ["aws-emulator", "-b", "0.0.0.0"]
       finish(0);
     },
 
-    // 6. Terraform outputs for an applied environment
-    '/api/terraform/outputs': async (_req, res, url) => {
+    // 6. What exists in an environment, from its local Terraform state: resources and outputs.
+    //    Read straight from terraform.tfstate, so it works without terraform or a running emulator.
+    '/api/terraform/state': async (_req, res, url) => {
       const envId = parseEnvId(url.searchParams.get('envId'));
       if (!envId) return sendJson(res, { ok: false, error: 'Invalid envId' }, 400);
 
-      const result = await runCommand('terraform', ['output', '-json'], {
-        cwd: path.join(OUT_DIR, 'environments', envId),
-      });
+      const statePath = path.join(OUT_DIR, 'environments', envId, 'terraform.tfstate');
+      if (!fs.existsSync(statePath)) return sendJson(res, { ok: true, exists: false, resources: [], outputs: {} });
       try {
-        sendJson(res, { ok: result.ok, outputs: JSON.parse(result.stdout || '{}') });
-      } catch {
-        sendJson(res, { ok: false, error: result.stderr });
+        const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+        const resources = (state.resources || [])
+          .filter((r: any) => r?.mode === 'managed' && Array.isArray(r.instances) && r.instances.length > 0)
+          .map((r: any) => ({ type: String(r.type), name: String(r.name) }));
+        const outputs = Object.fromEntries(
+          Object.entries<any>(state.outputs || {}).map(([name, out]) => [
+            name,
+            out?.sensitive ? '(sensitive)' : typeof out?.value === 'string' ? out.value : JSON.stringify(out?.value),
+          ])
+        );
+        sendJson(res, { ok: true, exists: true, resources, outputs });
+      } catch (err: any) {
+        sendJson(res, { ok: false, error: `Could not read ${envId} state: ${err?.message}` });
       }
     },
 

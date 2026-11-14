@@ -4,7 +4,6 @@ export const PROJECT_FILE_VERSION = '2.0.0';
 
 export interface ProjectFile {
   version: string;
-  targetLocalEmulator: boolean;
   environments: Record<EnvironmentId, Omit<EnvironmentProfile, 'color' | 'badgeClass'>>;
   nodes: CloudNode[];
   edges: CloudEdge[];
@@ -18,11 +17,9 @@ export function toProjectFile(state: {
   nodes: CloudNode[];
   edges: CloudEdge[];
   environments: Record<EnvironmentId, EnvironmentProfile>;
-  targetLocalEmulator: boolean;
 }): ProjectFile {
   return {
     version: PROJECT_FILE_VERSION,
-    targetLocalEmulator: state.targetLocalEmulator,
     // Colours are presentation and come from the app, not the project
     environments: Object.fromEntries(
       Object.entries(state.environments).map(([id, { color, badgeClass, ...profile }]) => [id, profile])

@@ -235,7 +235,7 @@ export function ResourceExplorerPanel() {
             {service === 'dynamodb' && (
               <>
                 <textarea rows={5} value={itemJson} onChange={(e) => setItemJson(e.target.value)} className={monoFieldCls} />
-                <p className="text-[11px] text-fg-faint">
+                <p className="text-[12.5px] text-fg-faint">
                   Plain JSON is converted to DynamoDB attribute values. Include the table's key attributes.
                 </p>
                 <div className="flex gap-1.5">
@@ -286,9 +286,9 @@ export function ResourceExplorerPanel() {
           }
         >
           {result.cliCommand && (
-            <code className="block mb-2 text-[11px] font-mono text-fg-faint break-all select-text">$ {result.cliCommand}</code>
+            <code className="block mb-2 text-[12.5px] font-mono text-fg-faint break-all select-text">$ {result.cliCommand}</code>
           )}
-          <pre className="rounded-md border border-line bg-base p-3 font-mono text-[11px] leading-relaxed text-fg/90 overflow-x-auto max-h-80 select-text">
+          <pre className="rounded-md border border-line bg-base p-3 font-mono text-[12.5px] leading-relaxed text-fg/90 overflow-x-auto max-h-80 select-text">
             {result.ok ? JSON.stringify(result.data, null, 2) : result.error}
           </pre>
         </Section>

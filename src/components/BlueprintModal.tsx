@@ -21,7 +21,7 @@ export function BlueprintModal() {
       >
         <div className="px-5 py-4 border-b border-line flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-[15px] font-medium text-fg">Blueprints</h2>
+            <h2 className="text-[16px] font-medium text-fg">Blueprints</h2>
             <p className="text-xs text-fg-muted mt-1">
               Pre-wired architectures with per-environment overrides. Loading one replaces the canvas; undo with ⌘Z.
             </p>
@@ -36,12 +36,12 @@ export function BlueprintModal() {
             <div key={tpl.id} className="px-5 py-4 flex items-start justify-between gap-6 hover:bg-raised/50 transition-colors">
               <div className="min-w-0">
                 <div className="flex items-baseline gap-2">
-                  <h3 className="text-[13px] font-medium text-fg">{tpl.name}</h3>
-                  <span className="text-[11px] text-fg-faint">
+                  <h3 className="text-[14px] font-medium text-fg">{tpl.name}</h3>
+                  <span className="text-[12.5px] text-fg-faint">
                     {tpl.nodes.length} resources · {tpl.edges.length} connections
                   </span>
                 </div>
-                <p className="text-[11px] font-mono text-fg-muted mt-1">{tpl.subtitle}</p>
+                <p className="text-[12.5px] font-mono text-fg-muted mt-1">{tpl.subtitle}</p>
                 <p className="text-xs text-fg-muted leading-relaxed mt-2">{tpl.description}</p>
               </div>
               <Button onClick={() => loadTemplate(tpl.id)} className="shrink-0 mt-0.5">

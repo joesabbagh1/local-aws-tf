@@ -1,13 +1,10 @@
 {
   "version": "2.0.0",
-  "targetLocalEmulator": true,
   "environments": {
     "dev": {
       "id": "dev",
       "name": "Development",
       "shortLabel": "DEV",
-      "color": "#6E94B0",
-      "badgeClass": "bg-sky-500/15 text-sky-400 border-sky-500/30",
       "region": "us-east-1",
       "accountId": "111122223333",
       "emulatorPort": 9297,
@@ -20,14 +17,18 @@
         "Environment": "dev",
         "ManagedBy": "LocalCloudStudio",
         "EmulatorPort": "9297"
+      },
+      "usage": {
+        "requestsMillions": 0.2,
+        "dataTransferGb": 5,
+        "storageGb": 5,
+        "logsGb": 2
       }
     },
     "testing": {
       "id": "testing",
       "name": "Testing / QA",
       "shortLabel": "TEST",
-      "color": "#9B8AC7",
-      "badgeClass": "bg-purple-500/15 text-purple-400 border-purple-500/30",
       "region": "us-east-1",
       "accountId": "222233334444",
       "emulatorPort": 9298,
@@ -40,14 +41,18 @@
         "Environment": "testing",
         "ManagedBy": "LocalCloudStudio",
         "EmulatorPort": "9298"
+      },
+      "usage": {
+        "requestsMillions": 0.5,
+        "dataTransferGb": 10,
+        "storageGb": 10,
+        "logsGb": 5
       }
     },
     "staging": {
       "id": "staging",
       "name": "Staging",
       "shortLabel": "STG",
-      "color": "#5FA59A",
-      "badgeClass": "bg-amber-500/15 text-amber-400 border-amber-500/30",
       "region": "us-west-2",
       "accountId": "333344445555",
       "emulatorPort": 9299,
@@ -60,14 +65,18 @@
         "Environment": "staging",
         "ManagedBy": "LocalCloudStudio",
         "EmulatorPort": "9299"
+      },
+      "usage": {
+        "requestsMillions": 2,
+        "dataTransferGb": 50,
+        "storageGb": 50,
+        "logsGb": 20
       }
     },
     "prod": {
       "id": "prod",
       "name": "Production",
       "shortLabel": "PROD",
-      "color": "#D08A5C",
-      "badgeClass": "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
       "region": "us-west-2",
       "accountId": "999988887777",
       "emulatorPort": 9300,
@@ -81,6 +90,12 @@
         "ManagedBy": "LocalCloudStudio",
         "Criticality": "High",
         "EmulatorPort": "9300"
+      },
+      "usage": {
+        "requestsMillions": 25,
+        "dataTransferGb": 800,
+        "storageGb": 500,
+        "logsGb": 150
       }
     }
   },
@@ -363,8 +378,8 @@
       "type": "awsNode",
       "parentId": "node-subnet-private",
       "position": {
-        "x": 24,
-        "y": 245
+        "x": 29.230546979342876,
+        "y": 281.61382885540024
       },
       "data": {
         "label": "Session & Query Cache",

@@ -68,13 +68,13 @@ export const AwsContainerNode = memo(({ id, data, selected }: NodeProps<CloudNod
             <AwsServiceIcon iconName={svc?.iconName || 'Network'} className="w-3.5 h-3.5" />
           </span>
           <span className="text-xs text-fg-muted shrink-0">{svc?.shortName}</span>
-          <span className="text-[13px] font-medium text-fg truncate">{data.label}</span>
+          <span className="text-[14px] font-medium text-fg truncate">{data.label}</span>
           {tier && (
-            <span className="text-[11px] text-fg-faint px-1.5 rounded border border-line shrink-0">{tier}</span>
+            <span className="text-[12.5px] text-fg-faint px-1.5 rounded border border-line shrink-0">{tier}</span>
           )}
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0 font-mono text-[11px]">
+        <div className="flex items-center gap-2.5 shrink-0 font-mono text-[12.5px]">
           <span
             className={isOverridden('cidr_block') ? 'text-accent' : 'text-fg-muted'}
             title={`CIDR in ${activeEnv}${isOverridden('cidr_block') ? ' (override)' : ''}`}

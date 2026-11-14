@@ -2,8 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { AWS_CATEGORIES, AWS_SERVICES_CATALOG } from '../data/awsCatalog';
 import { useCloudStore } from '../store/useCloudStore';
 import { AwsServiceIcon } from './AwsServiceIcon';
-import { Search, Plus, ChevronRight, X } from 'lucide-react';
-import { cn } from './ui';
+import { Search, Plus, ChevronRight, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { IconButton, cn } from './ui';
+import { emulatorSupport } from '../utils/emulatorSupport';
 
 /** "DynamoDB NoSQL Table" → "NoSQL Table", "Internet Gateway (IGW)" → "Internet Gateway" */
 function secondaryName(name: string, shortName: string): string {
@@ -16,6 +17,8 @@ export function ServiceCatalogSidebar() {
   const [search, setSearch] = useState('');
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
   const addServiceNode = useCloudStore((s) => s.addServiceNode);
+  const isOpen = useCloudStore((s) => s.isCatalogOpen);
+  const setOpen = useCloudStore((s) => s.setCatalogOpen);
 
   const filteredByCategory = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -50,11 +53,21 @@ export function ServiceCatalogSidebar() {
     }));
   };
 
+  if (!isOpen) {
+    return (
+      <aside className="w-10 shrink-0 h-full bg-panel border-r border-line flex flex-col items-center py-3 select-none">
+        <IconButton onClick={() => setOpen(true)} title="Show services (⌘B)">
+          <PanelLeftOpen className="w-4 h-4" />
+        </IconButton>
+      </aside>
+    );
+  }
+
   return (
     <aside className="w-64 shrink-0 h-full bg-panel border-r border-line flex flex-col select-none">
       {/* Search */}
-      <div className="p-3 border-b border-line">
-        <div className="relative">
+      <div className="p-3 border-b border-line flex items-center gap-1.5">
+        <div className="relative flex-1 min-w-0">
           <Search className="w-3.5 h-3.5 text-fg-faint absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
@@ -74,6 +87,9 @@ export function ServiceCatalogSidebar() {
             </button>
           )}
         </div>
+        <IconButton onClick={() => setOpen(false)} title="Hide services (⌘B)" className="-mr-1">
+          <PanelLeftClose className="w-4 h-4" />
+        </IconButton>
       </div>
 
       {/* Categories */}
@@ -90,8 +106,8 @@ export function ServiceCatalogSidebar() {
                 <ChevronRight
                   className={cn('w-3 h-3 shrink-0 transition-transform', !isCollapsed && 'rotate-90')}
                 />
-                <span className="text-[11px] font-medium truncate">{category}</span>
-                <span className="ml-auto text-[11px] text-fg-faint tabular-nums">{services.length}</span>
+                <span className="text-[12.5px] font-medium truncate">{category}</span>
+                <span className="ml-auto text-[12.5px] text-fg-faint tabular-nums">{services.length}</span>
               </button>
 
               {!isCollapsed && (
@@ -108,8 +124,14 @@ export function ServiceCatalogSidebar() {
                       <span className="w-5 flex justify-center shrink-0" style={{ color: svc.color }}>
                         <AwsServiceIcon iconName={svc.iconName} className="w-3.5 h-3.5" />
                       </span>
-                      <span className="text-[13px] text-fg shrink-0">{svc.shortName}</span>
+                      <span className="text-[14px] text-fg shrink-0">{svc.shortName}</span>
                       <span className="text-xs text-fg-faint truncate">{secondaryName(svc.name, svc.shortName)}</span>
+                      {emulatorSupport(svc).level === 'fails' && (
+                        <span
+                          className="w-1.5 h-1.5 rounded-full bg-warn shrink-0"
+                          title={`Fails on the emulator in tests:\n${emulatorSupport(svc).errors[0] || ''}`}
+                        />
+                      )}
                       <Plus className="w-3.5 h-3.5 ml-auto shrink-0 text-fg-muted opacity-0 group-hover:opacity-100 transition-opacity" />
                     </div>
                   ))}

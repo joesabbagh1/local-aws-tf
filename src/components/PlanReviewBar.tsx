@@ -31,7 +31,7 @@ export function PlanReviewBar() {
       <div className="h-11 pl-4 pr-2 flex items-center gap-4">
         {hasChanges ? (
           <>
-            <span className="text-[13px] text-fg whitespace-nowrap">Plan for {activeEnv}</span>
+            <span className="text-[14px] text-fg whitespace-nowrap">Plan for {activeEnv}</span>
             <span className="flex items-center gap-3 font-mono text-xs whitespace-nowrap">
               <span className={add ? 'text-ok' : 'text-fg-faint'}>+{add} add</span>
               <span className={change ? 'text-warn' : 'text-fg-faint'}>~{change} change</span>
@@ -49,7 +49,7 @@ export function PlanReviewBar() {
           </>
         ) : (
           <>
-            <span className="text-[13px] text-fg-muted whitespace-nowrap">
+            <span className="text-[14px] text-fg-muted whitespace-nowrap">
               No changes. <span className="text-fg">{activeEnv}</span> already matches the canvas.
             </span>
             <Button variant="ghost" onClick={discardPlan}>
@@ -61,8 +61,8 @@ export function PlanReviewBar() {
 
       {plan.other.length > 0 && (
         <div className="px-4 py-2.5 border-t border-line">
-          <div className="text-[11px] text-fg-faint mb-1.5">Not on the canvas</div>
-          <ul className="space-y-0.5 font-mono text-[11px]">
+          <div className="text-[12.5px] text-fg-faint mb-1.5">Not on the canvas</div>
+          <ul className="space-y-0.5 font-mono text-[12.5px]">
             {plan.other.slice(0, MAX_OTHER_SHOWN).map((c) => (
               <li key={c.address} className="flex gap-2">
                 <span className={cn('w-2 text-center', PLAN_ACTION_STYLE[c.action].text)}>

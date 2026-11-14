@@ -1,78 +1,145 @@
-import type { CloudNode, CloudEdge } from '../types/cloud';
-import { SERVICE_BY_TYPE, getDefaultConfigForService } from '../data/awsCatalog';
+import type { CloudNode, CloudEdge, EnvironmentId } from '../types/cloud';
+import { DEFAULT_ENVIRONMENTS, SERVICE_BY_TYPE, getDefaultConfigForService } from '../data/awsCatalog';
+import { compileTerraformForEnvironment, EXTRA_HCL_KEY, sanitizeIdentifier } from './terraformCompiler';
+import { parseHclLiteral, parseHclStringMap, splitHclBody } from './hclBody';
+
+export interface HclImportResult {
+  nodes: CloudNode[];
+  edges: CloudEdge[];
+  importedCount: number;
+  /** Arguments kept as each node's Extra HCL. */
+  extraArgCount: number;
+  /** Resources with no canvas service (helpers like aws_s3_bucket_versioning, or unsupported types). */
+  skippedResources: string[];
+  /** Arguments that could not be kept, and why. */
+  dropped: { address: string; key: string; reason: string }[];
+  /** Extra HCL that points at things the canvas won't define. */
+  warnings: string[];
+}
+
+// Meta-arguments the canvas has no model for; carrying them over would break references to the resource
+const UNSUPPORTED_META = new Set(['count', 'for_each', 'provider']);
+// Computed by AWS, never set
+const IGNORED_ARGS = new Set(['tags_all', 'id', 'arn']);
+
+const ALL_ENVS: Record<EnvironmentId, boolean> = { dev: true, testing: true, staging: true, prod: true };
+
+/** Top-level argument and block names the compiler writes into this node's main resource block. */
+function compilerOwnedKeys(node: CloudNode): Set<string> {
+  const svc = SERVICE_BY_TYPE[node.data.serviceType];
+  const resName = sanitizeIdentifier(node.data.resourceName);
+  const { mainTf } = compileTerraformForEnvironment([node], [], DEFAULT_ENVIRONMENTS.dev, DEFAULT_ENVIRONMENTS);
+  const header = `resource "${svc.terraformResourceType}" "${resName}" {`;
+  const start = mainTf.indexOf(header);
+  if (start === -1) return new Set();
+  const block = splitHclBody(mainTf.slice(start)).find((item) => item.key === 'resource');
+  const body = block ? block.text.slice(block.text.indexOf('{') + 1, block.text.lastIndexOf('}')) : '';
+  return new Set(splitHclBody(body).map((item) => item.key));
+}
 
 /**
  * Parses Terraform HCL (`resource "<type>" "<name>" { ... }`) and reconstructs
  * a 2D node graph and inferred dependency/wiring edges for LocalCloud Studio.
+ * Arguments the form models become fields; the rest are kept as the node's Extra HCL.
  */
-export function parseTerraformHclToCanvas(hclText: string): {
-  nodes: CloudNode[];
-  edges: CloudEdge[];
-  importedCount: number;
-} {
+export function parseTerraformHclToCanvas(hclText: string): HclImportResult {
   const nodes: CloudNode[] = [];
   const edges: CloudEdge[] = [];
+  const dropped: HclImportResult['dropped'] = [];
+  const warnings: string[] = [];
+  let extraArgCount = 0;
 
-  // Match top-level resource blocks: resource "aws_..." "name" { ... }
-  const resourceRegex = /resource\s+"([a-zA-Z0-9_]+)"\s+"([a-zA-Z0-9_-]+)"\s*\{/g;
-  const blocks: {
-    tfType: string;
-    tfName: string;
-    body: string;
-  }[] = [];
-
-  let match: RegExpExecArray | null;
-  while ((match = resourceRegex.exec(hclText)) !== null) {
-    const tfType = match[1];
-    const tfName = match[2];
-    const startIdx = match.index + match[0].length;
-
-    // Find matching closing brace
-    let depth = 1;
-    let i = startIdx;
-    while (i < hclText.length && depth > 0) {
-      if (hclText[i] === '{') depth++;
-      else if (hclText[i] === '}') depth--;
-      i++;
-    }
-    const body = hclText.slice(startIdx, i - 1);
-    blocks.push({ tfType, tfName, body });
+  // Top-level resource blocks: resource "aws_..." "name" { ... }
+  const blocks: { tfType: string; tfName: string; body: string }[] = [];
+  for (const item of splitHclBody(hclText)) {
+    if (item.key !== 'resource' || item.kind !== 'block') continue;
+    const header = /^resource\s+"([a-zA-Z0-9_]+)"\s+"([a-zA-Z0-9_-]+)"\s*\{/.exec(item.text);
+    if (!header) continue;
+    blocks.push({
+      tfType: header[1],
+      tfName: header[2],
+      body: item.text.slice(header[0].length, item.text.lastIndexOf('}')),
+    });
   }
 
   // Map secondary companion resources to their primary service type
   const primaryBlocks = blocks.filter((b) => Boolean(SERVICE_BY_TYPE[b.tfType]));
   const nodeByTfAddress: Record<string, CloudNode> = {};
 
+  // Imported names may not be valid canvas identifiers; references in Extra HCL follow the rename
+  const renames = new Map<string, string>();
+  for (const b of primaryBlocks) {
+    const svc = SERVICE_BY_TYPE[b.tfType];
+    const sanitized = sanitizeIdentifier(b.tfName);
+    if (svc && sanitized !== b.tfName) renames.set(`${svc.terraformResourceType}.${b.tfName}`, `${svc.terraformResourceType}.${sanitized}`);
+  }
+
   primaryBlocks.forEach((b, idx) => {
     const svc = SERVICE_BY_TYPE[b.tfType];
     if (!svc) return;
+    const address = `${b.tfType}.${b.tfName}`;
 
     const baseConfig = getDefaultConfigForService(b.tfType);
+    const fieldsByKey = new Map(svc.schema.map((f) => [f.key, f]));
+    const items = splitHclBody(b.body);
+    let tags: Record<string, string> = {};
 
-    // Extract simple key = value pairs from body
-    for (const field of svc.schema) {
-      const keyRegex = new RegExp(`\\b${field.key}\\s*=\\s*([^\\n#]+)`, 'm');
-      const m = keyRegex.exec(b.body);
-      if (m) {
-        const raw = m[1].trim();
-        if (field.type === 'boolean') {
-          baseConfig[field.key] = raw === 'true';
-        } else if (field.type === 'number') {
-          const num = parseFloat(raw.replace(/[^0-9.-]/g, ''));
-          if (!isNaN(num)) baseConfig[field.key] = num;
-        } else {
-          // Strip surrounding quotes if present
-          const cleaned = raw.replace(/^"(.*)"$/, '$1');
-          if (!cleaned.includes('${') && !cleaned.startsWith('aws_')) {
-            baseConfig[field.key] = cleaned;
-          }
-        }
+    // 1. Literal values for fields the form models
+    const mapped = new Set<string>();
+    for (const item of items) {
+      const field = item.kind === 'attribute' ? fieldsByKey.get(item.key) : undefined;
+      if (!field) continue;
+      const literal = parseHclLiteral(item.value || '');
+      if (literal === undefined) continue;
+      if (field.type === 'number' && typeof literal === 'number') baseConfig[field.key] = literal;
+      else if (field.type === 'boolean' && typeof literal === 'boolean') baseConfig[field.key] = literal;
+      else if (field.type !== 'number' && field.type !== 'boolean') baseConfig[field.key] = String(literal);
+      else continue;
+      mapped.add(item.key);
+    }
+
+    const nodeId = `node-import-${b.tfName}-${idx}`;
+    const probe: CloudNode = {
+      id: nodeId,
+      type: 'awsNode',
+      position: { x: 0, y: 0 },
+      data: { label: b.tfName, resourceName: b.tfName, serviceType: b.tfType, baseConfig, envOverrides: {}, envEnabled: ALL_ENVS, tags: {} },
+    };
+    const owned = compilerOwnedKeys(probe);
+
+    // 2. Everything else: kept as Extra HCL unless the compiler writes it too (Terraform rejects duplicates)
+    const extra: string[] = [];
+    for (const item of items) {
+      if (mapped.has(item.key) || IGNORED_ARGS.has(item.key)) continue;
+      if (item.key === 'tags' && item.kind === 'attribute') {
+        const parsed = parseHclStringMap(item.value || '');
+        if (parsed) tags = parsed;
+        else dropped.push({ address, key: 'tags', reason: 'not a plain map of strings' });
+        continue;
       }
+      if (UNSUPPORTED_META.has(item.key)) {
+        dropped.push({ address, key: item.key, reason: 'not supported on the canvas' });
+        continue;
+      }
+      if (owned.has(item.key)) {
+        dropped.push({
+          address,
+          key: item.key,
+          reason: fieldsByKey.has(item.key) ? 'not a literal value the form can hold' : 'generated by LocalCloud',
+        });
+        continue;
+      }
+      let text = item.text;
+      for (const [from, to] of renames) text = text.replace(new RegExp(`\\b${from.replace('.', '\\.')}\\b`, 'g'), to);
+      extra.push(text);
+    }
+    if (extra.length > 0) {
+      baseConfig[EXTRA_HCL_KEY] = extra.join('\n');
+      extraArgCount += extra.length;
     }
 
     const col = idx % 4;
     const row = Math.floor(idx / 4);
-    const nodeId = `node-import-${b.tfName}-${idx}`;
 
     const label = b.tfName
       .split('_')
@@ -98,9 +165,7 @@ export function parseTerraformHclToCanvas(hclText: string): {
           staging: true,
           prod: true,
         },
-        tags: {
-          ImportedFrom: 'TerraformHCL',
-        },
+        tags: { ...tags, ImportedFrom: 'TerraformHCL' },
       },
     };
 
@@ -200,9 +265,29 @@ export function parseTerraformHclToCanvas(hclText: string): {
     if (subnetEdges.length === 1) vpcEdges.forEach((e) => nestedEdgeIds.add(e.id));
   }
 
+  // Extra HCL can only point at what the canvas will compile
+  const onCanvas = new Set(
+    nodes.map((n) => `${SERVICE_BY_TYPE[n.data.serviceType].terraformResourceType}.${sanitizeIdentifier(n.data.resourceName)}`)
+  );
+  for (const node of nodes) {
+    const extra = String(node.data.baseConfig[EXTRA_HCL_KEY] || '');
+    const missing = new Set<string>();
+    for (const m of extra.matchAll(/\b(aws_[a-z0-9_]+\.[A-Za-z0-9_-]+|var\.\w+|local\.\w+|module\.\w+|data\.\w+\.\w+)/g)) {
+      if (!onCanvas.has(m[1])) missing.add(m[1]);
+    }
+    if (missing.size > 0) {
+      warnings.push(`${node.data.resourceName}: Extra HCL refers to ${[...missing].join(', ')}, which the canvas doesn't define`);
+    }
+  }
+
+  const primaryAddresses = new Set(primaryBlocks.map((b) => `${b.tfType}.${b.tfName}`));
   return {
     nodes,
     edges: edges.filter((e) => !nestedEdgeIds.has(e.id)),
     importedCount: nodes.length,
+    extraArgCount,
+    skippedResources: blocks.map((b) => `${b.tfType}.${b.tfName}`).filter((a) => !primaryAddresses.has(a)),
+    dropped,
+    warnings,
   };
 }

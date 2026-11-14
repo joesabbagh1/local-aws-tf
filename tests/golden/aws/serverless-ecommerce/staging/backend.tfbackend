@@ -1,0 +1,8 @@
+# State settings for Staging (staging). Fill in once; LocalCloud never overwrites this file.
+# The bucket must exist before `terraform init` and should have versioning enabled.
+
+bucket       = "CHANGE-ME-terraform-state"
+key          = "localcloud/staging/terraform.tfstate"
+region       = "us-west-2"
+encrypt      = true
+use_lockfile = true
