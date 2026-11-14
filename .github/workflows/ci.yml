@@ -40,7 +40,8 @@ jobs:
           TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugins
 
   e2e:
-    runs-on: ubuntu-latest
+    # Playwright 1.57 can't install its browser on Ubuntu 26.04 (ubuntu-latest); pin until it's upgraded
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
