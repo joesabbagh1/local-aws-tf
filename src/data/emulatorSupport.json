@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-14T00:47:50.020Z",
+  "generatedAt": "2026-11-14T01:51:24.677Z",
   "terraformVersion": "1.10.5",
   "emulatorImageCreated": "2026-11-13T21:02:50.109036177Z",
   "byType": {
@@ -154,10 +154,12 @@
       "errors": []
     },
     "aws_security_group": {
-      "status": "verified",
+      "status": "second-apply",
       "applied": 2,
       "failed": 0,
-      "errors": []
+      "errors": [
+        "The emulator doesn't create AWS's default egress rule for security groups in a VPC, so the provider's cleanup step fails. The group is created; LocalCloud marks it usable, and applying again finishes the rest."
+      ]
     },
     "aws_sns_topic": {
       "status": "verified",
@@ -322,12 +324,10 @@
       "errors": []
     },
     "aws_lb": {
-      "status": "fails",
-      "applied": 1,
-      "failed": 1,
-      "errors": [
-        "destroy: deleting ELBv2 Load Balancer (arn:aws:elasticloadbalancing:us-west-2:000000000000:loadbalancer/app/lc-prod-public-ingress-alb/90cb9dedc9ffd8c4): operation error Elastic Load Balancing v2: DeleteLoadBalancer, https response error StatusCode: 400, RequestID: 88147d97-ddf5-4211-840e-8041d245cedb, OperationNotPermitted: Load balancer 'arn:aws:elasticloadbalancing:us-west-2:000000000000:loadbalancer/ap"
-      ]
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
     },
     "aws_lb_listener": {
       "status": "verified",
@@ -358,7 +358,7 @@
       "applied": 0,
       "failed": 1,
       "errors": [
-        "destroy: deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: 86f1df5a-d4de-47d0-9980-d60c7274f8f7, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
+        "destroy: deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: defa58c9-b6e4-490e-b506-c58cdf6de997, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
       ]
     }
   },
@@ -367,7 +367,7 @@
       "canvas": "ai-streaming-rag",
       "envId": "dev",
       "ok": false,
-      "durationSeconds": 1259,
+      "durationSeconds": 1258,
       "generalErrors": [],
       "resources": [
         {
@@ -428,7 +428,7 @@
       "canvas": "ai-streaming-rag",
       "envId": "prod",
       "ok": false,
-      "durationSeconds": 1257,
+      "durationSeconds": 1256,
       "generalErrors": [],
       "resources": [
         {
@@ -488,7 +488,7 @@
       "canvas": "catalog-coverage",
       "envId": "dev",
       "ok": false,
-      "durationSeconds": 121,
+      "durationSeconds": 103,
       "generalErrors": [],
       "resources": [
         {
@@ -619,7 +619,7 @@
       "canvas": "catalog-coverage",
       "envId": "prod",
       "ok": false,
-      "durationSeconds": 114,
+      "durationSeconds": 85,
       "generalErrors": [],
       "resources": [
         {
@@ -750,7 +750,7 @@
       "canvas": "serverless-ecommerce",
       "envId": "dev",
       "ok": true,
-      "durationSeconds": 148,
+      "durationSeconds": 139,
       "generalErrors": [],
       "resources": [
         {
@@ -884,7 +884,7 @@
       "canvas": "serverless-ecommerce",
       "envId": "prod",
       "ok": true,
-      "durationSeconds": 140,
+      "durationSeconds": 137,
       "generalErrors": [],
       "resources": [
         {
@@ -1018,7 +1018,7 @@
       "canvas": "vpc-ecs-rds-ha",
       "envId": "dev",
       "ok": true,
-      "durationSeconds": 189,
+      "durationSeconds": 186,
       "generalErrors": [],
       "resources": [
         {
@@ -1132,7 +1132,7 @@
       "canvas": "vpc-ecs-rds-ha",
       "envId": "prod",
       "ok": true,
-      "durationSeconds": 198,
+      "durationSeconds": 199,
       "generalErrors": [],
       "resources": [
         {
@@ -1164,7 +1164,7 @@
           "address": "aws_elasticache_replication_group.session_redis_cache",
           "type": "aws_elasticache_replication_group",
           "applied": true,
-          "destroyError": "deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: 86f1df5a-d4de-47d0-9980-d60c7274f8f7, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
+          "destroyError": "deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: defa58c9-b6e4-490e-b506-c58cdf6de997, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
         },
         {
           "address": "aws_elasticache_subnet_group.session_redis_cache_subnets",
@@ -1190,7 +1190,7 @@
           "address": "aws_lb.public_ingress_alb",
           "type": "aws_lb",
           "applied": true,
-          "destroyError": "deleting ELBv2 Load Balancer (arn:aws:elasticloadbalancing:us-west-2:000000000000:loadbalancer/app/lc-prod-public-ingress-alb/90cb9dedc9ffd8c4): operation error Elastic Load Balancing v2: DeleteLoadBalancer, https response error StatusCode: 400, RequestID: 88147d97-ddf5-4211-840e-8041d245cedb, OperationNotPermitted: Load balancer 'arn:aws:elasticloadbalancing:us-west-2:000000000000:loadbalancer/ap"
+          "destroyBlocked": "deletion protection"
         },
         {
           "address": "aws_lb_listener.public_ingress_alb_listener",

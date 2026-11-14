@@ -131,7 +131,9 @@ function SupportLine({ support }: { support: ReturnType<typeof emulatorSupport> 
   const text =
     support.level === 'verified'
       ? 'Applies and destroys on the emulator'
-      : support.level === 'fails'
+      : support.level === 'second-apply'
+        ? 'Works on the emulator with a second Apply'
+        : support.level === 'fails'
         ? `Fails on the emulator: ${support.errors[0] || 'see npm run test:emulator'}`
         : 'Not tested on the emulator';
   return (
@@ -142,7 +144,11 @@ function SupportLine({ support }: { support: ReturnType<typeof emulatorSupport> 
       <span
         className={cn(
           'w-1.5 h-1.5 rounded-full shrink-0',
-          support.level === 'verified' ? 'bg-ok' : support.level === 'fails' ? 'bg-warn' : 'bg-fg-faint/50'
+          support.level === 'verified' || support.level === 'second-apply'
+            ? 'bg-ok'
+            : support.level === 'fails'
+              ? 'bg-warn'
+              : 'bg-fg-faint/50'
         )}
       />
       <span className={cn('truncate', support.level === 'fails' ? 'text-warn' : 'text-fg-faint')}>{text}</span>

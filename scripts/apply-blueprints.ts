@@ -108,7 +108,7 @@ function runTerraformJson(cwd: string, args: string[], env: NodeJS.ProcessEnv, t
       if (msg.type === 'apply_complete') completed.add(msg.hook?.resource?.addr);
       if (msg.type === 'apply_errored') errors.set(msg.hook?.resource?.addr, errors.get(msg.hook?.resource?.addr) || 'apply errored');
       if (msg.type === 'diagnostic' && msg.diagnostic?.severity === 'error') {
-        const text = `${msg.diagnostic.summary}${msg.diagnostic.detail ? `: ${msg.diagnostic.detail}` : ''}`.replace(/\s+/g, ' ').slice(0, 400);
+        const text = `${msg.diagnostic.summary}${msg.diagnostic.detail ? `: ${msg.diagnostic.detail}` : ''}`.replace(/\s+/g, ' ');
         if (msg.diagnostic.address) errors.set(msg.diagnostic.address, text);
         else general.push(text);
       }
@@ -241,7 +241,7 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
       address,
       type,
       applied: apply.completed.has(address),
-      error: apply.errors.get(address),
+      error: apply.errors.get(address)?.slice(0, 400),
     }));
 
     if (!keep) {
@@ -290,14 +290,22 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
 
 type RunResult = Awaited<ReturnType<typeof testCanvas>>;
 
-/** Per resource type: verified only if every instance applied (and destroyed) in every run. */
+/**
+ * Per resource type: verified only if every instance applied (and destroyed) in every run;
+ * second-apply if it only got there after LocalCloud's emulator workaround; otherwise fails.
+ */
 function summarize(runs: RunResult[]) {
-  const byType: Record<string, { status: 'verified' | 'fails'; applied: number; failed: number; errors: string[] }> = {};
+  type Status = 'verified' | 'second-apply' | 'fails';
+  const byType: Record<string, { status: Status; applied: number; failed: number; errors: string[] }> = {};
   for (const run of runs) {
     for (const r of run.resources) {
       const entry = (byType[r.type] ||= { status: 'verified', applied: 0, failed: 0, errors: [] });
       const error = r.error || r.destroyError;
-      if (r.applied && !r.destroyError) entry.applied++;
+      if (r.applied && r.error === SECURITY_GROUP_QUIRK_NOTE && !r.destroyError) {
+        entry.applied++;
+        if (entry.status === 'verified') entry.status = 'second-apply';
+        if (!entry.errors.includes(r.error)) entry.errors.push(r.error);
+      } else if (r.applied && !error) entry.applied++;
       else if (error) {
         entry.failed++;
         entry.status = 'fails';
