@@ -23,6 +23,7 @@ import type { CloudEdge, CloudNode, EnvironmentId } from '../src/types/cloud';
 import {
   buildLambdaArtifact,
   checkEmulatorHealth,
+  emulatorContainerLogs,
   getEmulatorAwsEnv,
   startEmulatorContainer,
   stopEmulatorContainer,
@@ -189,7 +190,10 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
   const start = await startEmulatorContainer(CONTAINER, port, workDir);
   if (!start.ok) throw new Error(`emulator did not start: ${start.error || start.output}`);
   try {
-    if (!(await waitForEmulator(port))) throw new Error('emulator did not become healthy');
+    if (!(await waitForEmulator(port))) {
+      const logs = await emulatorContainerLogs(CONTAINER);
+      throw new Error(`emulator did not become healthy. Container log:\n${logs || '(empty)'}`);
+    }
 
     const tfEnv = {
       ...getEmulatorAwsEnv(port, env.region),

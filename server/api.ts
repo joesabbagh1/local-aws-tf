@@ -402,8 +402,12 @@ ENTRYPOINT ["aws-emulator", "-b", "0.0.0.0"]
   }
 
   await runCommand('docker', ['rm', '-f', containerName]);
+  // Run as the current user: the emulator writes its credentials into the mounted ~/.aws/emulator, which
+  // on Linux belongs to this uid (Docker Desktop on macOS hides the mismatch, Linux doesn't)
+  const asUser = typeof process.getuid === 'function' ? ['--user', `${process.getuid()}:${process.getgid!()}`] : [];
   const runRes = await runCommand('docker', [
     'run', '-d', '--rm',
+    ...asUser,
     '--name', containerName,
     '--memory=2g', '--memory-swap=2g',
     '-p', `127.0.0.1:${port}:${port}`,
@@ -414,6 +418,12 @@ ENTRYPOINT ["aws-emulator", "-b", "0.0.0.0"]
     '--telemetry', 'off',
   ]);
   return { ok: runRes.ok, output: (buildLogs ? `${buildLogs}\n` : '') + (runRes.stdout || runRes.stderr) };
+}
+
+/** The last lines a container logged, to explain why it isn't answering. */
+export async function emulatorContainerLogs(containerName: string, lines = 40): Promise<string> {
+  const res = await runCommand('docker', ['logs', '--tail', String(lines), containerName]);
+  return `${res.stdout}${res.stderr}`.trim();
 }
 
 export async function stopEmulatorContainer(containerName: string) {
