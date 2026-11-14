@@ -152,6 +152,17 @@ function SupportLine({ support }: { support: ReturnType<typeof emulatorSupport> 
         )}
       />
       <span className={cn('truncate', support.level === 'fails' ? 'text-warn' : 'text-fg-faint')}>{text}</span>
+      {support.upstreamIssueUrl && (
+        <a
+          href={support.upstreamIssueUrl}
+          target="_blank"
+          rel="noreferrer"
+          title="Reported to the emulator team"
+          className="shrink-0 font-mono text-fg-muted hover:text-fg underline decoration-line-strong underline-offset-2"
+        >
+          #{support.upstreamIssueUrl.split('/').pop()}
+        </a>
+      )}
     </div>
   );
 }

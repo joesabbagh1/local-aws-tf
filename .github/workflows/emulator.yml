@@ -1,0 +1,53 @@
+name: Emulator support
+
+# Applies every blueprint (and a canvas with the rest of the catalog) to a fresh AWS Emulator and
+# opens a PR when the set of resource types that work changes. The app shows these results per service.
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: emulator-support
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+      - run: npm ci
+      - run: cp src/data/emulatorSupport.json "$RUNNER_TEMP/previous.json"
+      # Known emulator gaps make some resources fail every week; only a broken run fails this step
+      - run: npm run test:emulator -- --report-only
+      - id: compare
+        run: |
+          if node scripts/compare-emulator-support.mjs "$RUNNER_TEMP/previous.json" src/data/emulatorSupport.json "$RUNNER_TEMP/summary.md"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            code=$?
+            if [ "$code" -ne 3 ]; then exit "$code"; fi
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.compare.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: emulator-support/weekly
+          commit-message: Update emulator support from the weekly run
+          title: Emulator support changed
+          body-path: ${{ runner.temp }}/summary.md
+          add-paths: src/data/emulatorSupport.json
+          delete-branch: true

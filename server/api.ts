@@ -421,8 +421,9 @@ export async function stopEmulatorContainer(containerName: string) {
 }
 
 /**
- * Known emulator gap: for a security group in a VPC the emulator doesn't create AWS's default egress
- * rule, so the provider's step that removes it fails and Terraform marks the (existing) group tainted.
+ * Known emulator gap (aws/aws-emulator#46): the emulator stores a VPC security group's default egress
+ * rule without ports, so the provider's request to remove it (ports 0-0) doesn't match, and Terraform
+ * marks the (existing) group tainted.
  * Returns the addresses of groups that failed only for that reason, from plain-text apply output.
  */
 export function securityGroupEgressQuirks(applyOutput: string): string[] {
@@ -741,7 +742,7 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
               const untainted = await runCommand('terraform', ['untaint', '-no-color', addr], { cwd: envDir, env: awsEnv });
               res.write(
                 untainted.ok
-                  ? `\nNote: ${addr} exists, but the emulator doesn't create AWS's default egress rule for security groups in a VPC, so Terraform marked it failed. LocalCloud marked it usable again. Apply again to create the rest.\n`
+                  ? `\nNote: ${addr} exists, but an emulator bug (aws/aws-emulator#46) made Terraform mark it failed. LocalCloud marked it usable again. Apply again to create the rest.\n`
                   : `\nCould not untaint ${addr}: ${untainted.stderr.trim()}\n`
               );
             }

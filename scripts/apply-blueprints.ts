@@ -3,7 +3,10 @@
  * then destroys it, and records which resource types work. The result feeds the support level the
  * UI shows per service: src/data/emulatorSupport.json.
  *
- *   npm run test:emulator -- [filter] [--env dev,prod] [--port 9397] [--keep]
+ *   npm run test:emulator -- [filter] [--env dev,prod] [--port 9397] [--keep] [--report-only]
+ *
+ * Exit codes: 0 all clean, 1 some resource failed, 2 the run itself broke (no canvas could run).
+ * With --report-only, resource failures still exit 0: for scheduled runs that record results.
  *
  * Needs Docker and Terraform. Uses its own port and container, so it never touches the emulators
  * the app runs.
@@ -30,12 +33,13 @@ const RESULTS_FILE = path.join(repoRoot, 'src', 'data', 'emulatorSupport.json');
 const CONTAINER = 'localcloud-apply-test';
 
 function parseArgs(argv: string[]) {
-  const args = { filter: '', envs: ['dev', 'prod'] as EnvironmentId[], port: 9397, keep: false };
+  const args = { filter: '', envs: ['dev', 'prod'] as EnvironmentId[], port: 9397, keep: false, reportOnly: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--env') args.envs = argv[++i].split(',') as EnvironmentId[];
     else if (a === '--port') args.port = Number(argv[++i]);
     else if (a === '--keep') args.keep = true;
+    else if (a === '--report-only') args.reportOnly = true;
     else args.filter = a;
   }
   return args;
@@ -128,8 +132,16 @@ function runTerraformJson(cwd: string, args: string[], env: NodeJS.ProcessEnv, t
   });
 }
 
+/** Emulator gaps already reported upstream (github.com/aws/aws-emulator/issues/<n>), by resource type. */
+const UPSTREAM_ISSUES: Record<string, number> = {
+  aws_security_group: 46,
+  aws_kinesis_stream: 327,
+  aws_instance: 422,
+  aws_elasticache_replication_group: 355,
+};
+
 const SECURITY_GROUP_QUIRK_NOTE =
-  "The emulator doesn't create AWS's default egress rule for security groups in a VPC, so the provider's cleanup step fails. The group is created; LocalCloud marks it usable, and applying again finishes the rest.";
+  "The emulator stores a VPC security group's default egress rule without ports, so the provider's request to remove it (ports 0-0) doesn't match (aws/aws-emulator#46). The group is created; LocalCloud marks it usable, and applying again finishes the rest.";
 
 function isSecurityGroupEgressQuirk(message: string) {
   return /revoking default IPv[46] egress rule for Security Group/.test(message) && /InvalidPermission\.NotFound/.test(message);
@@ -222,7 +234,7 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
     const apply = await runTerraformJson(workDir, ['apply', '-auto-approve', '-input=false', 'tfplan'], tfEnv, 20 * 60 * 1000);
     log(`apply exit ${apply.code}: ${apply.completed.size} created, ${apply.errors.size} failed`);
 
-    // Known emulator gap: security groups in a VPC are created but marked tainted. Untaint them and
+    // Known emulator gap (aws/aws-emulator#46): security groups in a VPC are created but marked tainted. Untaint them and
     // apply again, so the run still measures everything that depends on them.
     const quirkAddresses = [...apply.errors].filter(([, msg]) => isSecurityGroupEgressQuirk(msg)).map(([addr]) => addr);
     if (quirkAddresses.length > 0) {
@@ -296,7 +308,7 @@ type RunResult = Awaited<ReturnType<typeof testCanvas>>;
  */
 function summarize(runs: RunResult[]) {
   type Status = 'verified' | 'second-apply' | 'fails';
-  const byType: Record<string, { status: Status; applied: number; failed: number; errors: string[] }> = {};
+  const byType: Record<string, { status: Status; applied: number; failed: number; errors: string[]; upstreamIssue?: number }> = {};
   for (const run of runs) {
     for (const r of run.resources) {
       const entry = (byType[r.type] ||= { status: 'verified', applied: 0, failed: 0, errors: [] });
@@ -315,7 +327,10 @@ function summarize(runs: RunResult[]) {
       // Neither applied nor errored: skipped because something it depends on failed; says nothing about this type
     }
   }
-  for (const [type, entry] of Object.entries(byType)) if (entry.applied === 0 && entry.failed === 0) delete byType[type];
+  for (const [type, entry] of Object.entries(byType)) {
+    if (entry.applied === 0 && entry.failed === 0) delete byType[type];
+    else if (entry.status !== 'verified' && UPSTREAM_ISSUES[type]) entry.upstreamIssue = UPSTREAM_ISSUES[type];
+  }
   return byType;
 }
 
@@ -366,7 +381,10 @@ async function main() {
     console.log(`${`${r.canvas}/${r.envId}`.padEnd(38)}${(r.ok && !failed ? 'ok' : `FAIL ${failed}`).padEnd(8)}${r.durationSeconds}s`);
   }
   console.log(`\nwrote ${path.relative(repoRoot, RESULTS_FILE)}`);
-  process.exit(runs.every((r) => r.ok && r.resources.every((x) => !x.error && !x.destroyError)) ? 0 : 1);
+  // A run with no resources never got as far as planning (Docker, the emulator or Terraform failed)
+  if (runs.length === 0 || runs.every((r) => r.resources.length === 0)) process.exit(2);
+  const clean = runs.every((r) => r.ok && r.resources.every((x) => !x.error && !x.destroyError));
+  process.exit(clean || args.reportOnly ? 0 : 1);
 }
 
 main();
