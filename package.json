@@ -1,10 +1,29 @@
 {
-  "name": "local-cloud-studio",
-  "private": true,
-  "version": "1.0.0",
+  "name": "localcloud-studio",
+  "version": "0.1.0",
+  "description": "Design AWS infrastructure on a canvas, compile it to Terraform for dev, test, staging and prod, and run it against a local AWS Emulator.",
+  "keywords": [
+    "aws",
+    "terraform",
+    "infrastructure-as-code",
+    "aws-emulator",
+    "local-development",
+    "diagram",
+    "canvas"
+  ],
+  "license": "MIT",
+  "author": "Joe Sabbagh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joesabbagh1/local-aws-tf.git"
+  },
+  "homepage": "https://github.com/joesabbagh1/local-aws-tf#readme",
+  "bugs": {
+    "url": "https://github.com/joesabbagh1/local-aws-tf/issues"
+  },
   "type": "module",
   "bin": {
-    "localcloud": "dist-server/cli.cjs"
+    "localcloud-studio": "dist-server/cli.cjs"
   },
   "files": [
     "dist",
@@ -22,16 +41,8 @@
     "test": "vitest run",
     "validate:golden": "node scripts/validate-golden.mjs",
     "test:emulator": "esbuild scripts/apply-blueprints.ts --bundle --platform=node --format=cjs --target=node18 --outfile=node_modules/.cache/localcloud/apply-blueprints.cjs --log-level=warning && node node_modules/.cache/localcloud/apply-blueprints.cjs",
-    "test:e2e": "playwright test"
-  },
-  "dependencies": {
-    "@xyflow/react": "^12.3.5",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.460.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "tailwind-merge": "^2.5.4",
-    "zustand": "^5.0.1"
+    "test:e2e": "playwright test",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@aws-sdk/client-dynamodb": "^3.1169.0",
@@ -44,12 +55,19 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "@xyflow/react": "^12.3.5",
     "autoprefixer": "^10.4.20",
+    "clsx": "^2.1.1",
     "esbuild": "^0.21.5",
+    "lucide-react": "^0.460.0",
     "postcss": "^8.4.49",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^2.5.4",
     "tailwindcss": "^3.4.15",
     "typescript": "~5.6.2",
     "vite": "^5.4.10",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "zustand": "^5.0.1"
   }
 }

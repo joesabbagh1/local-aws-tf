@@ -4,21 +4,22 @@ Design AWS infrastructure on a 2D canvas, compile it to Terraform for four envir
 
 ## Quick start
 
+In the folder that should hold your project:
+
+```bash
+npx localcloud-studio            # opens on http://127.0.0.1:5173
+npx localcloud-studio ./infra --port 8080 --open
+```
+
+The canvas is saved to `localcloud.json` in that folder, Terraform for the emulator goes to `terraform-out/`, and **Export for AWS** writes `terraform-aws/`. Needs Node 18+. The live features (emulators, plan, apply) also need Docker, Terraform 1.10+ and `zip`.
+
+### From a clone
+
 ```bash
 npm install
-npm run dev        # http://127.0.0.1:5173
+npm run dev        # http://127.0.0.1:5173, saves to this folder
+npm run build && npm start -- path/to/project
 ```
-
-Requirements for the live features: Docker, Terraform, and `zip`.
-
-To run it without the dev server, against any project directory:
-
-```bash
-npm run build
-npm start -- path/to/project --port 5173   # or: npx localcloud path/to/project, once installed
-```
-
-The canvas is saved to `localcloud.json` in the project directory and Terraform is written to `terraform-out/` next to it.
 
 ## What you can do
 
@@ -69,3 +70,7 @@ npm run test:emulator     # apply + destroy every blueprint on a fresh emulator 
 `tests/golden/<target>/<blueprint>/<env>/` holds the Terraform each blueprint compiles to, for the emulator and as the AWS export (plus a small fixture that covers the export's network inputs and AMI lookup). After an intended compiler change, refresh it with `npm test -- -u` and review the diff. CI runs the first three.
 
 `test:emulator` applies each blueprint, plus a canvas with every other catalog service, to a fresh emulator on port 9397 (in dev and prod), then destroys it. It records which resource types work in `src/data/emulatorSupport.json`, which the UI reads. It takes a while and needs Docker, so it is run by hand and the results are committed. Pass a filter (`npm run test:emulator -- serverless --env dev`) to rerun part of it.
+
+## License
+
+[MIT](LICENSE)
