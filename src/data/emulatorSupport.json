@@ -1,25 +1,17 @@
 {
-  "generatedAt": "2026-11-14T01:51:24.677Z",
+  "generatedAt": "2026-11-14T12:06:20.342Z",
   "terraformVersion": "1.10.5",
   "emulatorImageCreated": "2026-11-13T21:02:50.109036177Z",
   "byType": {
-    "aws_bedrockagent_agent": {
-      "status": "fails",
-      "applied": 0,
-      "failed": 2,
-      "errors": [
-        "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
-      ]
-    },
     "aws_iam_role": {
       "status": "verified",
-      "applied": 18,
+      "applied": 20,
       "failed": 0,
       "errors": []
     },
     "aws_iam_role_policy": {
       "status": "verified",
-      "applied": 10,
+      "applied": 12,
       "failed": 0,
       "errors": []
     },
@@ -29,7 +21,8 @@
       "failed": 1,
       "errors": [
         "increasing Kinesis Stream (lc-dev-telemetry_ingest_stream) retention period: operation error Kinesis: IncreaseStreamRetentionPeriod, https response error StatusCode: 400, RequestID: , InvalidArgumentException: Requested retention period (24 hours) for stream lc-dev-telemetry_ingest_stream can not be shorter than existing retention period (24 hours). Use DecreaseRetentionPeriod API."
-      ]
+      ],
+      "upstreamIssue": 327
     },
     "aws_lambda_event_source_mapping": {
       "status": "verified",
@@ -39,7 +32,7 @@
     },
     "aws_lambda_function": {
       "status": "verified",
-      "applied": 6,
+      "applied": 8,
       "failed": 0,
       "errors": []
     },
@@ -60,6 +53,14 @@
       "applied": 2,
       "failed": 0,
       "errors": []
+    },
+    "aws_bedrockagent_agent": {
+      "status": "fails",
+      "applied": 0,
+      "failed": 2,
+      "errors": [
+        "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
+      ]
     },
     "aws_cloudwatch_event_bus": {
       "status": "verified",
@@ -108,8 +109,9 @@
       "applied": 0,
       "failed": 2,
       "errors": [
-        "collecting instance settings: couldn't find resource"
-      ]
+        "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000002, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator"
+      ],
+      "upstreamIssue": 422
     },
     "aws_internet_gateway": {
       "status": "verified",
@@ -158,8 +160,9 @@
       "applied": 2,
       "failed": 0,
       "errors": [
-        "The emulator doesn't create AWS's default egress rule for security groups in a VPC, so the provider's cleanup step fails. The group is created; LocalCloud marks it usable, and applying again finishes the rest."
-      ]
+        "The emulator stores a VPC security group's default egress rule without ports, so the provider's request to remove it (ports 0-0) doesn't match (aws/aws-emulator#46). The group is created; LocalCloud marks it usable, and applying again finishes the rest."
+      ],
+      "upstreamIssue": 46
     },
     "aws_sns_topic": {
       "status": "verified",
@@ -359,7 +362,8 @@
       "failed": 1,
       "errors": [
         "destroy: deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: defa58c9-b6e4-490e-b506-c58cdf6de997, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
-      ]
+      ],
+      "upstreamIssue": 355
     }
   },
   "runs": [
@@ -367,17 +371,11 @@
       "canvas": "ai-streaming-rag",
       "envId": "dev",
       "ok": false,
-      "durationSeconds": 1258,
+      "durationSeconds": 1257,
       "generalErrors": [],
       "resources": [
         {
-          "address": "aws_bedrockagent_agent.bedrock_reasoning_agent",
-          "type": "aws_bedrockagent_agent",
-          "applied": false,
-          "error": "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
-        },
-        {
-          "address": "aws_iam_role.bedrock_reasoning_agent_agent_role",
+          "address": "aws_iam_role.claude_reasoning_fn_exec_role",
           "type": "aws_iam_role",
           "applied": true
         },
@@ -389,6 +387,11 @@
         {
           "address": "aws_iam_role.rag_orchestrator_sfn_sfn_role",
           "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.claude_reasoning_fn_claude",
+          "type": "aws_iam_role_policy",
           "applied": true
         },
         {
@@ -406,6 +409,11 @@
           "address": "aws_lambda_event_source_mapping.telemetry_ingest_stream_stream_embedding_processor_fn",
           "type": "aws_lambda_event_source_mapping",
           "applied": false
+        },
+        {
+          "address": "aws_lambda_function.claude_reasoning_fn",
+          "type": "aws_lambda_function",
+          "applied": true
         },
         {
           "address": "aws_lambda_function.embedding_processor_fn",
@@ -427,18 +435,12 @@
     {
       "canvas": "ai-streaming-rag",
       "envId": "prod",
-      "ok": false,
+      "ok": true,
       "durationSeconds": 1256,
       "generalErrors": [],
       "resources": [
         {
-          "address": "aws_bedrockagent_agent.bedrock_reasoning_agent",
-          "type": "aws_bedrockagent_agent",
-          "applied": false,
-          "error": "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
-        },
-        {
-          "address": "aws_iam_role.bedrock_reasoning_agent_agent_role",
+          "address": "aws_iam_role.claude_reasoning_fn_exec_role",
           "type": "aws_iam_role",
           "applied": true
         },
@@ -450,6 +452,11 @@
         {
           "address": "aws_iam_role.rag_orchestrator_sfn_sfn_role",
           "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.claude_reasoning_fn_claude",
+          "type": "aws_iam_role_policy",
           "applied": true
         },
         {
@@ -465,6 +472,11 @@
         {
           "address": "aws_lambda_event_source_mapping.telemetry_ingest_stream_stream_embedding_processor_fn",
           "type": "aws_lambda_event_source_mapping",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function.claude_reasoning_fn",
+          "type": "aws_lambda_function",
           "applied": true
         },
         {
@@ -488,13 +500,19 @@
       "canvas": "catalog-coverage",
       "envId": "dev",
       "ok": false,
-      "durationSeconds": 103,
+      "durationSeconds": 71,
       "generalErrors": [],
       "resources": [
         {
           "address": "aws_autoscaling_group.cov_autoscaling_group",
           "type": "aws_autoscaling_group",
           "applied": true
+        },
+        {
+          "address": "aws_bedrockagent_agent.cov_bedrock_agent",
+          "type": "aws_bedrockagent_agent",
+          "applied": false,
+          "error": "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
         },
         {
           "address": "aws_cloudwatch_event_bus.cov_cloudwatch_event_bus",
@@ -532,6 +550,11 @@
           "applied": true
         },
         {
+          "address": "aws_iam_role.cov_bedrock_agent_agent_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
           "address": "aws_iam_role.cov_eks_cluster_eks_role",
           "type": "aws_iam_role",
           "applied": true
@@ -545,7 +568,8 @@
           "address": "aws_instance.cov_instance",
           "type": "aws_instance",
           "applied": false,
-          "error": "collecting instance settings: couldn't find resource"
+          "error": "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000002, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator",
+          "destroyError": "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000003, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator"
         },
         {
           "address": "aws_internet_gateway.cov_internet_gateway",
@@ -586,7 +610,7 @@
           "address": "aws_security_group.cov_security_group",
           "type": "aws_security_group",
           "applied": true,
-          "error": "The emulator doesn't create AWS's default egress rule for security groups in a VPC, so the provider's cleanup step fails. The group is created; LocalCloud marks it usable, and applying again finishes the rest."
+          "error": "The emulator stores a VPC security group's default egress rule without ports, so the provider's request to remove it (ports 0-0) doesn't match (aws/aws-emulator#46). The group is created; LocalCloud marks it usable, and applying again finishes the rest."
         },
         {
           "address": "aws_sns_topic.cov_sns_topic",
@@ -619,13 +643,19 @@
       "canvas": "catalog-coverage",
       "envId": "prod",
       "ok": false,
-      "durationSeconds": 85,
+      "durationSeconds": 70,
       "generalErrors": [],
       "resources": [
         {
           "address": "aws_autoscaling_group.cov_autoscaling_group",
           "type": "aws_autoscaling_group",
           "applied": true
+        },
+        {
+          "address": "aws_bedrockagent_agent.cov_bedrock_agent",
+          "type": "aws_bedrockagent_agent",
+          "applied": false,
+          "error": "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
         },
         {
           "address": "aws_cloudwatch_event_bus.cov_cloudwatch_event_bus",
@@ -663,6 +693,11 @@
           "applied": true
         },
         {
+          "address": "aws_iam_role.cov_bedrock_agent_agent_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
           "address": "aws_iam_role.cov_eks_cluster_eks_role",
           "type": "aws_iam_role",
           "applied": true
@@ -676,7 +711,8 @@
           "address": "aws_instance.cov_instance",
           "type": "aws_instance",
           "applied": false,
-          "error": "collecting instance settings: couldn't find resource"
+          "error": "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000002, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator",
+          "destroyError": "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000003, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator"
         },
         {
           "address": "aws_internet_gateway.cov_internet_gateway",
@@ -717,7 +753,7 @@
           "address": "aws_security_group.cov_security_group",
           "type": "aws_security_group",
           "applied": true,
-          "error": "The emulator doesn't create AWS's default egress rule for security groups in a VPC, so the provider's cleanup step fails. The group is created; LocalCloud marks it usable, and applying again finishes the rest."
+          "error": "The emulator stores a VPC security group's default egress rule without ports, so the provider's request to remove it (ports 0-0) doesn't match (aws/aws-emulator#46). The group is created; LocalCloud marks it usable, and applying again finishes the rest."
         },
         {
           "address": "aws_sns_topic.cov_sns_topic",
