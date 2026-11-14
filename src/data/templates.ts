@@ -597,9 +597,9 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
   {
     id: 'ai-streaming-rag',
     name: 'Real-Time AI RAG & Streaming Pipeline',
-    subtitle: 'Kinesis + Lambda + Bedrock AI + OpenSearch Vector + S3 + Step Functions',
+    subtitle: 'Kinesis + Lambda + Claude on Bedrock + OpenSearch Vector + Step Functions',
     description:
-      'Streaming ingestion & AI orchestration pipeline using Kinesis Data Streams, Step Functions workflows, Amazon Bedrock Claude 3.5 Sonnet, and OpenSearch vector indexing.',
+      'Streaming ingestion & AI orchestration pipeline using Kinesis Data Streams, Step Functions workflows, a Lambda that calls Claude through Amazon Bedrock, and OpenSearch vector indexing.',
     badge: 'AI & Streaming',
     nodes: [
       {
@@ -667,24 +667,29 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
         },
       },
       {
-        id: 'node-bedrock-agent',
+        id: 'node-lambda-claude',
         type: 'awsNode',
         position: { x: 760, y: 70 },
         data: {
-          label: 'Bedrock Claude Reasoning Agent',
-          resourceName: 'bedrock_reasoning_agent',
-          serviceType: 'aws_bedrock_agent',
+          label: 'Claude Reasoning Function',
+          resourceName: 'claude_reasoning_fn',
+          serviceType: 'aws_lambda_function',
           baseConfig: {
-            foundation_model: 'anthropic.claude-3-5-haiku-20241022-v1:0',
-            instruction: 'Synthesize real-time telemetry anomalies and recommend automated remediations.',
-            idle_session_ttl_in_seconds: 600,
+            runtime: 'python3.12',
+            handler: 'app.handler',
+            memory_size: 512,
+            timeout: 120,
+            architectures: 'arm64',
+            reserved_concurrent_executions: -1,
+            tracing_mode: 'Active',
+            env_vars: '{}',
+            claude_model_id: 'anthropic.claude-opus-5-5',
           },
-          envOverrides: {
-            staging: { foundation_model: 'anthropic.claude-3-5-sonnet-20241022-v2:0' },
-            prod: { foundation_model: 'anthropic.claude-3-5-sonnet-20241022-v2:0' },
-          },
+          envOverrides: {},
           envEnabled: { dev: true, testing: true, staging: true, prod: true },
-          tags: { AI: 'Bedrock' },
+          tags: { AI: 'Claude' },
+          // Placeholder until it is switched to a code folder with the Anthropic SDK (see the comment inside)
+          inlineCode: "import json\nimport os\n\n# Calls Claude through Amazon Bedrock with the Anthropic SDK, which the Lambda runtime does not include.\n# To deploy it, switch Code to Folder and point it at a folder holding this file plus the SDK:\n#   pip install \"anthropic[bedrock]\" -t functions/claude_reasoning\n#\n# from anthropic import AnthropicBedrockMantle\n#\n# client = AnthropicBedrockMantle(aws_region=os.environ[\"AWS_REGION\"])\n#\n# def handler(event, context):\n#     message = client.messages.create(\n#         model=os.environ[\"CLAUDE_MODEL_ID\"],\n#         max_tokens=1024,\n#         messages=[{\"role\": \"user\", \"content\": json.dumps(event)}],\n#     )\n#     return {\"text\": next(block.text for block in message.content if block.type == \"text\")}\n\n\ndef handler(event, context):\n    return {\"model\": os.environ.get(\"CLAUDE_MODEL_ID\"), \"received\": event}\n",
         },
       },
       {
@@ -726,11 +731,11 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
         data: { relationshipType: 'event_trigger', label: 'StartExecution' },
       },
       {
-        id: 'e-sfn-bedrock',
+        id: 'e-sfn-claude',
         source: 'node-sfn-orchestrator',
-        target: 'node-bedrock-agent',
+        target: 'node-lambda-claude',
         animated: true,
-        data: { relationshipType: 'data_flow', label: 'InvokeAgent' },
+        data: { relationshipType: 'data_flow', label: 'Invoke' },
       },
       {
         id: 'e-lambda-os',

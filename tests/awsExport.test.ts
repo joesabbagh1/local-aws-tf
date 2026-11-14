@@ -41,10 +41,11 @@ describe('AWS export', () => {
     expect(mainTf).toContain('ami                         = "ami-0abcdef1234567890"');
   });
 
-  it('keeps the emulator build on placeholders, with no backend', () => {
+  it('keeps the emulator build on placeholder network IDs, with no backend', () => {
     const out = compile('emulator');
     expect(out.mainTf).toContain('"subnet-default-dev-a"');
-    expect(out.mainTf).not.toContain('aws_ssm_parameter');
+    // The placeholder AMI exists nowhere, so the emulator build looks it up too
+    expect(out.mainTf).toContain('data.aws_ssm_parameter.al2023_ami_x86_64.insecure_value');
     expect(out.backendTf).toBe('');
     expect(out.backendConfig).toBe('');
   });

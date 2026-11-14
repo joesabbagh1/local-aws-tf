@@ -391,6 +391,7 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
       { key: 'reserved_concurrent_executions', label: 'Reserved Concurrency (-1 = unreserved)', type: 'number', defaultValue: -1, group: 'scaling', envConfigurable: true },
       { key: 'tracing_mode', label: 'X-Ray Tracing Mode', type: 'select', defaultValue: 'PassThrough', group: 'advanced', envConfigurable: true, options: [{ label: 'Active', value: 'Active' }, { label: 'PassThrough', value: 'PassThrough' }] },
       { key: 'env_vars', label: 'Environment Variables (JSON)', type: 'json', defaultValue: '{"LOG_LEVEL":"info","STAGE":"local"}', group: 'general', envConfigurable: true },
+      { key: 'claude_model_id', label: 'Claude model (Bedrock)', type: 'string', defaultValue: '', group: 'advanced', envConfigurable: true, placeholder: 'anthropic.claude-opus-5-5', description: 'Grants bedrock-mantle:CreateInference and sets CLAUDE_MODEL_ID. Call it with the Anthropic SDK (AnthropicBedrockMantle); empty for none.' },
     ],
     outputs: [
       { name: 'lambda_arn', tfExpression: (r) => `aws_lambda_function.${r}.arn`, description: 'ARN of the Lambda function' },

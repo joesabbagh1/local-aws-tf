@@ -107,7 +107,10 @@ export function mainResourceType(node: CloudNode, cfg: Record<string, any>): str
   return SERVICE_BY_TYPE[node.data.serviceType]?.terraformResourceType || node.data.serviceType;
 }
 
-/** Placeholder AMI the catalog ships as a default; on AWS it is swapped for the latest Amazon Linux 2023. */
+/**
+ * Placeholder AMI the catalog ships as a default. It exists in neither AWS nor the emulator, so both
+ * builds look up the latest Amazon Linux 2023 instead (the emulator serves the same SSM parameter).
+ */
 const PLACEHOLDER_AMI = 'ami-0c55b159cbfafe1f0';
 
 /** Tags that only mean something on the emulator. */
@@ -119,9 +122,9 @@ function amiArchForInstanceType(instanceType: string): 'x86_64' | 'arm64' {
   return suffix.includes('g') ? 'arm64' : 'x86_64';
 }
 
-function amiExpression(cfgAmi: unknown, instanceType: string, target: CompileTarget): string {
+function amiExpression(cfgAmi: unknown, instanceType: string): string {
   const ami = typeof cfgAmi === 'string' && cfgAmi.trim() ? cfgAmi.trim() : PLACEHOLDER_AMI;
-  if (target === 'aws' && ami === PLACEHOLDER_AMI) {
+  if (ami === PLACEHOLDER_AMI) {
     return `data.aws_ssm_parameter.al2023_ami_${amiArchForInstanceType(instanceType)}.insecure_value`;
   }
   return `"${ami}"`;
@@ -296,8 +299,8 @@ locals {
     resourceBlocks.push(...wiringBlocks);
   }
 
-  // AWS export: look up the current Amazon Linux 2023 image instead of a fixed AMI ID
-  if (target === 'aws') {
+  // Look up the current Amazon Linux 2023 image instead of a fixed AMI ID
+  {
     for (const arch of ['x86_64', 'arm64'] as const) {
       const ref = `data.aws_ssm_parameter.al2023_ami_${arch}`;
       if (resourceBlocks.some((b) => b.includes(ref))) {
@@ -900,9 +903,14 @@ ${
 
     case 'aws_instance':
       return `resource "aws_instance" "${resName}" {
-  ami                         = ${amiExpression(cfg.ami, cfg.instance_type || 't3.micro', target)}
+  ami                         = ${amiExpression(cfg.ami, cfg.instance_type || 't3.micro')}
   instance_type               = "${cfg.instance_type || 't3.micro'}"
-  subnet_id                   = ${firstSubnetRef}
+  subnet_id                   = ${firstSubnetRef}${
+    // Same zone as the subnet. Redundant on AWS, but the emulator rejects the empty zone the provider sends otherwise
+    effectiveSubnets.length > 0
+      ? `\n  availability_zone           = aws_subnet.${sanitizeIdentifier(effectiveSubnets[0].data.resourceName || effectiveSubnets[0].data.label)}.availability_zone`
+      : ''
+  }
   vpc_security_group_ids      = ${sgIdsArray}
   associate_public_ip_address = ${Boolean(cfg.associate_public_ip_address ?? false)}
   monitoring                  = ${Boolean(cfg.monitoring ?? false)}
@@ -954,6 +962,10 @@ ${cfg.user_data || '#!/bin/bash\necho "Ready"'}
         }
       }
 
+      // Claude through Amazon Bedrock's Messages API (bedrock-mantle): the model ID for the code, and the permission
+      const claudeModelId = typeof cfg.claude_model_id === 'string' ? cfg.claude_model_id.trim() : '';
+      if (claudeModelId) parsedEnvVars.CLAUDE_MODEL_ID = claudeModelId;
+
       const envEntries = Object.entries(parsedEnvVars)
         .map(([k, v]) => `      ${k} = "${v}"`)
         .join('\n');
@@ -999,13 +1011,32 @@ ${envEntries}
   tags = merge(local.common_tags, {
     Name = "\${local.name_prefix}-${resName}"
   })${dependsOnLine}
-}`;
+}${
+        claudeModelId
+          ? `
+
+# Lets the function call Claude through Amazon Bedrock's Messages API (bedrock-mantle endpoint)
+resource "aws_iam_role_policy" "${resName}_claude" {
+  name = "claude-bedrock"
+  role = aws_iam_role.${resName}_exec_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["bedrock-mantle:CreateInference"]
+      Resource = "*"
+    }]
+  })
+}`
+          : ''
+      }`;
     }
 
     case 'aws_autoscaling_group':
       return `resource "aws_launch_template" "${resName}_lt" {
   name_prefix   = "\${local.name_prefix}-${resName}-"
-  image_id      = ${amiExpression(undefined, cfg.instance_type || 't3.medium', target)}
+  image_id      = ${amiExpression(undefined, cfg.instance_type || 't3.medium')}
   instance_type = "${cfg.instance_type || 't3.medium'}"
 }
 

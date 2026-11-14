@@ -22,7 +22,12 @@ output "embedding_processor_fn_invoke_arn" {
   value       = aws_lambda_function.embedding_processor_fn.invoke_arn
 }
 
-output "bedrock_reasoning_agent_agent_id" {
-  description = "Bedrock Agent Identifier (Bedrock Claude Reasoning Agent)"
-  value       = aws_bedrockagent_agent.bedrock_reasoning_agent.id
+output "claude_reasoning_fn_lambda_arn" {
+  description = "ARN of the Lambda function (Claude Reasoning Function)"
+  value       = aws_lambda_function.claude_reasoning_fn.arn
+}
+
+output "claude_reasoning_fn_invoke_arn" {
+  description = "Invoke ARN for API Gateway (Claude Reasoning Function)"
+  value       = aws_lambda_function.claude_reasoning_fn.invoke_arn
 }

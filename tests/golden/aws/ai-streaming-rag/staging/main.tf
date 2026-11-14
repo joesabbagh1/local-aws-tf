@@ -103,8 +103,8 @@ resource "aws_lambda_function" "embedding_processor_fn" {
   })
 }
 
-resource "aws_iam_role" "bedrock_reasoning_agent_agent_role" {
-  name = "${local.name_prefix}-bedrock_reasoning_agent-agent-role"
+resource "aws_iam_role" "claude_reasoning_fn_exec_role" {
+  name = "${local.name_prefix}-claude_reasoning_fn-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -112,20 +112,53 @@ resource "aws_iam_role" "bedrock_reasoning_agent_agent_role" {
       Action = "sts:AssumeRole"
       Effect = "Allow"
       Principal = {
-        Service = "bedrock.amazonaws.com"
+        Service = "lambda.amazonaws.com"
       }
     }]
   })
 }
 
-resource "aws_bedrockagent_agent" "bedrock_reasoning_agent" {
-  agent_name                  = "${local.name_prefix}-bedrock_reasoning_agent"
-  agent_resource_role_arn     = aws_iam_role.bedrock_reasoning_agent_agent_role.arn
-  foundation_model            = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-  instruction                 = "Synthesize real-time telemetry anomalies and recommend automated remediations."
-  idle_session_ttl_in_seconds = 600
+resource "aws_lambda_function" "claude_reasoning_fn" {
+  function_name                  = "${local.name_prefix}-claude_reasoning_fn"
+  role                           = aws_iam_role.claude_reasoning_fn_exec_role.arn
+  runtime                        = "python3.12"
+  handler                        = "app.handler"
+  filename                       = "artifacts/claude_reasoning_fn.zip"
+  source_code_hash               = filebase64sha256("artifacts/claude_reasoning_fn.zip")
+  memory_size                    = 512
+  timeout                        = 120
+  architectures                  = ["arm64"]
+  reserved_concurrent_executions = -1
 
-  tags = local.common_tags
+  tracing_config {
+    mode = "Active"
+  }
+
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+      CLAUDE_MODEL_ID = "anthropic.claude-opus-5-5"
+    }
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${local.name_prefix}-claude_reasoning_fn"
+  })
+}
+
+# Lets the function call Claude through Amazon Bedrock's Messages API (bedrock-mantle endpoint)
+resource "aws_iam_role_policy" "claude_reasoning_fn_claude" {
+  name = "claude-bedrock"
+  role = aws_iam_role.claude_reasoning_fn_exec_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["bedrock-mantle:CreateInference"]
+      Resource = "*"
+    }]
+  })
 }
 
 resource "aws_opensearch_domain" "vector_knowledge_index" {
