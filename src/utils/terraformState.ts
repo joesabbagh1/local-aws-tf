@@ -1,6 +1,5 @@
 import type { CloudNode, EnvironmentId, ProvisioningState } from '../types/cloud';
-import { SERVICE_BY_TYPE } from '../data/awsCatalog';
-import { sanitizeIdentifier } from './terraformCompiler';
+import { mainResourceType, resolveNodeConfigForEnv, sanitizeIdentifier } from './terraformCompiler';
 
 /** What `/api/terraform/state` reports for one environment. */
 export interface TerraformStateSummary {
@@ -32,7 +31,7 @@ export function statusFromState(
     .sort((a, b) => b.resName.length - a.resName.length);
 
   for (const { node, resName } of byResName) {
-    const tfType = SERVICE_BY_TYPE[node.data.serviceType]?.terraformResourceType || node.data.serviceType;
+    const tfType = mainResourceType(node, resolveNodeConfigForEnv(node, envId));
     const applied = node.data.envEnabled?.[envId] !== false && inState.has(`${tfType}.${resName}`);
     const current = node.data.provisioningStatus?.[envId];
     status[node.id] = applied ? 'provisioned' : current === 'failed' ? 'failed' : 'unapplied';

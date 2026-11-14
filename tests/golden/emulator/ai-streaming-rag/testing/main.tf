@@ -16,6 +16,7 @@ locals {
 
 resource "aws_kinesis_stream" "telemetry_ingest_stream" {
   name             = "${local.name_prefix}-telemetry_ingest_stream"
+  retention_period = 24
 
   stream_mode_details {
     stream_mode = "ON_DEMAND"

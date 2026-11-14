@@ -90,6 +90,23 @@ function dnsSafeName(base: string, maxLength: number): string {
   return `trimsuffix(substr("\${local.name_prefix}-${slug}", 0, ${maxLength}), "-")`;
 }
 
+/** Services AWS only accepts with subnets in two or more availability zones. */
+const MULTI_AZ_TYPES = new Set(['aws_lb', 'aws_db_instance', 'aws_elasticache_cluster']);
+
+/** Redis with more than one node is a replication group, not a cluster. */
+function isRedisReplicationGroup(serviceType: string, cfg: Record<string, any>): boolean {
+  return serviceType === 'aws_elasticache_cluster' && (cfg.engine || 'redis') === 'redis' && Number(cfg.num_cache_nodes ?? 1) > 1;
+}
+
+/**
+ * The Terraform type of a node's main resource, which can depend on its config (multi-node Redis).
+ * Status, outputs and Extra HCL all attach to `<this type>.<resource name>`.
+ */
+export function mainResourceType(node: CloudNode, cfg: Record<string, any>): string {
+  if (isRedisReplicationGroup(node.data.serviceType, cfg)) return 'aws_elasticache_replication_group';
+  return SERVICE_BY_TYPE[node.data.serviceType]?.terraformResourceType || node.data.serviceType;
+}
+
 /** Placeholder AMI the catalog ships as a default; on AWS it is swapped for the latest Amazon Linux 2023. */
 const PLACEHOLDER_AMI = 'ami-0c55b159cbfafe1f0';
 
@@ -208,7 +225,22 @@ locals {
       connectedSubnets.unshift(containingSubnet);
     }
 
-    const effectiveSubnets = connectedSubnets.length > 0 ? connectedSubnets : subnetNodes;
+    let effectiveSubnets = connectedSubnets.length > 0 ? connectedSubnets : subnetNodes;
+
+    // Load balancers, RDS and ElastiCache need subnets in at least two availability zones. When a node
+    // sits in one subnet, add the other subnets of the same tier in its VPC.
+    if (MULTI_AZ_TYPES.has(node.data.serviceType) && effectiveSubnets.length === 1) {
+      const anchor = effectiveSubnets[0];
+      const anchorVpc = findAncestorOfType(anchor, 'aws_vpc', nodeById);
+      const tierOf = (s: CloudNode) => String(resolveNodeConfigForEnv(s, envId).tier || 'public');
+      const siblings = subnetNodes.filter(
+        (s) =>
+          s.id !== anchor.id &&
+          findAncestorOfType(s, 'aws_vpc', nodeById)?.id === anchorVpc?.id &&
+          tierOf(s) === tierOf(anchor)
+      );
+      effectiveSubnets = [anchor, ...siblings];
+    }
 
     const connectedSgs = incoming
       .map((e) => nodeById[e.source])
@@ -250,7 +282,7 @@ locals {
     const extraHcl = typeof cfg[EXTRA_HCL_KEY] === 'string' ? cfg[EXTRA_HCL_KEY] : '';
     resourceBlocks.push(
       extraHcl.trim()
-        ? injectExtraHcl(block, SERVICE_BY_TYPE[node.data.serviceType]?.terraformResourceType || node.data.serviceType, resName, extraHcl)
+        ? injectExtraHcl(block, mainResourceType(node, cfg), resName, extraHcl)
         : block
     );
   }
@@ -292,7 +324,7 @@ data "aws_ssm_parameter" "al2023_ami_${arch}" {
     target === 'aws' ? generateS3Backend(envProfile) : { backendTf: '', backendConfig: '' };
 
   // 5. Generate outputs.tf
-  const outputsTf = generateOutputsTf(activeNodes);
+  const outputsTf = generateOutputsTf(activeNodes, envId);
 
   // 6. Generate AWS Emulator helper scripts & Docker Compose for all 4 environments
   const emulatorScriptSh = generateEmulatorShellScript(envProfile, allEnvironments);
@@ -567,6 +599,8 @@ function renderResourceBlock(
 ): string {
   const type = node.data.serviceType;
   const isAws = target === 'aws';
+  // Real subnets to place the resource in; the emulator build's placeholder IDs don't count
+  const hasSubnets = effectiveSubnets.length > 0 || isAws;
   // Without a VPC / Subnet on the canvas the emulator accepts placeholder IDs; real AWS needs existing ones
   const vpcRef = connectedVpc
     ? `aws_vpc.${sanitizeIdentifier(connectedVpc.data.resourceName || connectedVpc.data.label)}.id`
@@ -1002,12 +1036,71 @@ resource "aws_autoscaling_group" "${resName}" {
   tags = local.common_tags
 }
 
+# Execution role: lets ECS pull the image and write logs
+resource "aws_iam_role" "${resName}_exec_role" {
+  name = "\${local.name_prefix}-${resName}-exec-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "${resName}_exec_role" {
+  role       = aws_iam_role.${resName}_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# Task role: what the containers themselves may call
+resource "aws_iam_role" "${resName}_task_role" {
+  name = "\${local.name_prefix}-${resName}-task-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+${
+  Boolean(cfg.enable_execute_command ?? true)
+    ? `
+# ECS Exec needs the task to open SSM sessions
+resource "aws_iam_role_policy" "${resName}_task_exec_command" {
+  name = "ecs-exec"
+  role = aws_iam_role.${resName}_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+`
+    : ''
+}
 resource "aws_ecs_task_definition" "${resName}_task" {
   family                   = "\${local.name_prefix}-${resName}"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "${cfg.cpu || '256'}"
   memory                   = "${cfg.memory || '512'}"
+  execution_role_arn       = aws_iam_role.${resName}_exec_role.arn
+  task_role_arn            = aws_iam_role.${resName}_task_role.arn
 
   container_definitions = jsonencode([
     {
@@ -1202,7 +1295,19 @@ ${
     }
 
     case 'aws_db_instance':
-      return `resource "aws_db_instance" "${resName}" {
+      // Without a subnet group RDS lands in the account's default VPC, away from its security groups
+      return `${
+        hasSubnets
+          ? `resource "aws_db_subnet_group" "${resName}_subnets" {
+  name       = ${dnsSafeName(`${resName}-subnets`, 255)}
+  subnet_ids = ${subnetIdsArray}
+
+  tags = local.common_tags
+}
+
+`
+          : ''
+      }resource "aws_db_instance" "${resName}" {
   identifier              = ${dnsSafeName(resName, 63)}
   engine                  = "${cfg.engine || 'postgres'}"
   engine_version          = "${cfg.engine_version || '16.3'}"
@@ -1215,26 +1320,61 @@ ${
   multi_az                = ${Boolean(cfg.multi_az ?? false)}
   storage_encrypted       = ${Boolean(cfg.storage_encrypted ?? true)}
   backup_retention_period = ${Number(cfg.backup_retention_period ?? 7)}
-  skip_final_snapshot     = ${Boolean(cfg.skip_final_snapshot ?? true)}
-  vpc_security_group_ids  = ${sgIdsArray}
+  skip_final_snapshot     = ${Boolean(cfg.skip_final_snapshot ?? true)}${
+    // Keeping a final snapshot needs a name for it, or destroy can never succeed
+    Boolean(cfg.skip_final_snapshot ?? true) ? '' : `\n  final_snapshot_identifier = ${dnsSafeName(`${resName}-final`, 255)}`
+  }
+  vpc_security_group_ids  = ${sgIdsArray}${hasSubnets ? `\n  db_subnet_group_name    = aws_db_subnet_group.${resName}_subnets.name` : ''}
 
   tags = merge(local.common_tags, {
     Name = "\${local.name_prefix}-${resName}"
   })${dependsOnLine}
 }`;
 
-    case 'aws_elasticache_cluster':
-      return `resource "aws_elasticache_cluster" "${resName}" {
+    case 'aws_elasticache_cluster': {
+      const subnetGroup = hasSubnets
+        ? `resource "aws_elasticache_subnet_group" "${resName}_subnets" {
+  name       = ${dnsSafeName(`${resName}-subnets`, 255)}
+  subnet_ids = ${subnetIdsArray}
+}
+
+`
+        : '';
+      const placement = hasSubnets
+        ? `\n  subnet_group_name    = aws_elasticache_subnet_group.${resName}_subnets.name\n  security_group_ids   = ${sgIdsArray}`
+        : '';
+
+      if (isRedisReplicationGroup(type, cfg)) {
+        const nodes = Number(cfg.num_cache_nodes);
+        return `${subnetGroup}# Redis with more than one node: a primary plus replicas with automatic failover
+resource "aws_elasticache_replication_group" "${resName}" {
+  replication_group_id       = ${dnsSafeName(resName, 40)}
+  description                = "${resName} (${nodes} nodes)"
+  engine                     = "redis"
+  node_type                  = "${cfg.node_type || 'cache.t4g.micro'}"
+  num_cache_clusters         = ${nodes}
+  port                       = ${Number(cfg.port ?? 6379)}
+  automatic_failover_enabled = true
+  multi_az_enabled           = true${placement}
+
+  tags = merge(local.common_tags, {
+    Name = "\${local.name_prefix}-${resName}"
+  })${dependsOnLine}
+}`;
+      }
+
+      return `${subnetGroup}resource "aws_elasticache_cluster" "${resName}" {
   cluster_id           = ${dnsSafeName(resName, 50)}
   engine               = "${cfg.engine || 'redis'}"
   node_type            = "${cfg.node_type || 'cache.t4g.micro'}"
   num_cache_nodes      = ${Number(cfg.num_cache_nodes ?? 1)}
-  port                 = ${Number(cfg.port ?? 6379)}
+  port                 = ${Number(cfg.port ?? 6379)}${placement}
 
   tags = merge(local.common_tags, {
     Name = "\${local.name_prefix}-${resName}"
   })${dependsOnLine}
 }`;
+    }
 
     case 'aws_sqs_queue': {
       const suffix = cfg.fifo_queue ? '.fifo' : '';
@@ -1442,10 +1582,8 @@ resource "aws_cognito_user_pool_client" "${resName}_client" {
 
     case 'aws_kinesis_stream':
       return `resource "aws_kinesis_stream" "${resName}" {
-  name             = "\${local.name_prefix}-${resName}"${
-    // 24h is the AWS default; setting it explicitly makes the provider ask to "increase" to the same value, which fails
-    Number(cfg.retention_period ?? 24) !== 24 ? `\n  retention_period = ${Number(cfg.retention_period)}` : ''
-  }
+  name             = "\${local.name_prefix}-${resName}"
+  retention_period = ${Number(cfg.retention_period ?? 24)}
 ${
   cfg.stream_mode === 'PROVISIONED'
     ? `  shard_count      = ${Number(cfg.shard_count ?? 1)}`
@@ -1665,7 +1803,7 @@ resource "aws_lambda_event_source_mapping" "${srcName}_stream_${dstName}" {
   return blocks;
 }
 
-function generateOutputsTf(activeNodes: CloudNode[]): string {
+function generateOutputsTf(activeNodes: CloudNode[], envId: EnvironmentId): string {
   const lines: string[] = [
     `# ============================================================================
 # Compiled Terraform Outputs
@@ -1676,7 +1814,11 @@ function generateOutputsTf(activeNodes: CloudNode[]): string {
     const svc = SERVICE_BY_TYPE[node.data.serviceType];
     if (!svc || !svc.outputs.length) continue;
     const resName = sanitizeIdentifier(node.data.resourceName || node.data.label);
-    for (const out of svc.outputs) {
+    const outputs =
+      mainResourceType(node, resolveNodeConfigForEnv(node, envId)) === 'aws_elasticache_replication_group'
+        ? [{ name: 'primary_endpoint', tfExpression: (r: string) => `aws_elasticache_replication_group.${r}.primary_endpoint_address`, description: 'Redis primary endpoint' }]
+        : svc.outputs;
+    for (const out of outputs) {
       lines.push(`output "${resName}_${out.name}" {
   description = "${out.description} (${node.data.label})"
   value       = ${out.tfExpression(resName)}

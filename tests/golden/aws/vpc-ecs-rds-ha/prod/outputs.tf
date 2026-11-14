@@ -22,6 +22,16 @@ output "private_app_subnet_subnet_id" {
   value       = aws_subnet.private_app_subnet.id
 }
 
+output "public_ingress_subnet_b_subnet_id" {
+  description = "The ID of the Subnet (Public Ingress Subnet B)"
+  value       = aws_subnet.public_ingress_subnet_b.id
+}
+
+output "private_app_subnet_b_subnet_id" {
+  description = "The ID of the Subnet (Private App Subnet B)"
+  value       = aws_subnet.private_app_subnet_b.id
+}
+
 output "public_ingress_alb_alb_dns_name" {
   description = "DNS name of the load balancer (Public Ingress ALB)"
   value       = aws_lb.public_ingress_alb.dns_name
@@ -47,9 +57,9 @@ output "primary_postgres_db_rds_endpoint" {
   value       = aws_db_instance.primary_postgres_db.endpoint
 }
 
-output "session_redis_cache_cache_nodes" {
-  description = "ElastiCache node connection details (Session & Query Cache)"
-  value       = aws_elasticache_cluster.session_redis_cache.cache_nodes
+output "session_redis_cache_primary_endpoint" {
+  description = "Redis primary endpoint (Session & Query Cache)"
+  value       = aws_elasticache_replication_group.session_redis_cache.primary_endpoint_address
 }
 
 output "db_credentials_secret_secret_arn" {

@@ -1,7 +1,7 @@
 # ============================================================================
 # LocalCloud Studio — Compiled Terraform Infrastructure (PRODUCTION)
 # Target Mode: AWS Emulator (https://127.0.0.1:9300)
-# Active Resources: 8 | Wired Connections: 4
+# Active Resources: 10 | Wired Connections: 4
 # ============================================================================
 
 locals {
@@ -50,11 +50,35 @@ resource "aws_subnet" "private_app_subnet" {
   })
 }
 
+resource "aws_subnet" "public_ingress_subnet_b" {
+  vpc_id                  = aws_vpc.primary_vpc.id
+  cidr_block              = "10.100.2.0/24"
+  availability_zone       = "us-west-2b"
+  map_public_ip_on_launch = true
+
+  tags = merge(local.common_tags, {
+    Name = "${local.name_prefix}-public_ingress_subnet_b"
+    Tier = "public"
+  })
+}
+
+resource "aws_subnet" "private_app_subnet_b" {
+  vpc_id                  = aws_vpc.primary_vpc.id
+  cidr_block              = "10.100.11.0/24"
+  availability_zone       = "us-west-2b"
+  map_public_ip_on_launch = false
+
+  tags = merge(local.common_tags, {
+    Name = "${local.name_prefix}-private_app_subnet_b"
+    Tier = "private"
+  })
+}
+
 resource "aws_lb" "public_ingress_alb" {
   name                       = trimsuffix(substr("${local.name_prefix}-public-ingress-alb", 0, 32), "-")
   internal                   = false
   load_balancer_type         = "application"
-  subnets                    = [aws_subnet.public_ingress_subnet.id]
+  subnets                    = [aws_subnet.public_ingress_subnet.id, aws_subnet.public_ingress_subnet_b.id]
   security_groups            = []
   enable_deletion_protection = true
   idle_timeout               = 120
@@ -103,12 +127,47 @@ resource "aws_ecs_cluster" "core_backend_fargate_cluster" {
   tags = local.common_tags
 }
 
+# Execution role: lets ECS pull the image and write logs
+resource "aws_iam_role" "core_backend_fargate_exec_role" {
+  name = "${local.name_prefix}-core_backend_fargate-exec-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "core_backend_fargate_exec_role" {
+  role       = aws_iam_role.core_backend_fargate_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# Task role: what the containers themselves may call
+resource "aws_iam_role" "core_backend_fargate_task_role" {
+  name = "${local.name_prefix}-core_backend_fargate-task-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
 resource "aws_ecs_task_definition" "core_backend_fargate_task" {
   family                   = "${local.name_prefix}-core_backend_fargate"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "2048"
   memory                   = "4096"
+  execution_role_arn       = aws_iam_role.core_backend_fargate_exec_role.arn
+  task_role_arn            = aws_iam_role.core_backend_fargate_task_role.arn
 
   container_definitions = jsonencode([
     {
@@ -146,6 +205,13 @@ resource "aws_ecs_service" "core_backend_fargate" {
   tags = local.common_tags
 }
 
+resource "aws_db_subnet_group" "primary_postgres_db_subnets" {
+  name       = trimsuffix(substr("${local.name_prefix}-primary-postgres-db-subnets", 0, 255), "-")
+  subnet_ids = [aws_subnet.private_app_subnet.id, aws_subnet.private_app_subnet_b.id]
+
+  tags = local.common_tags
+}
+
 resource "aws_db_instance" "primary_postgres_db" {
   identifier              = trimsuffix(substr("${local.name_prefix}-primary-postgres-db", 0, 63), "-")
   engine                  = "postgres"
@@ -160,19 +226,32 @@ resource "aws_db_instance" "primary_postgres_db" {
   storage_encrypted       = true
   backup_retention_period = 30
   skip_final_snapshot     = false
+  final_snapshot_identifier = trimsuffix(substr("${local.name_prefix}-primary-postgres-db-final", 0, 255), "-")
   vpc_security_group_ids  = []
+  db_subnet_group_name    = aws_db_subnet_group.primary_postgres_db_subnets.name
 
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-primary_postgres_db"
   })
 }
 
-resource "aws_elasticache_cluster" "session_redis_cache" {
-  cluster_id           = trimsuffix(substr("${local.name_prefix}-session-redis-cache", 0, 50), "-")
-  engine               = "redis"
-  node_type            = "cache.r6g.large"
-  num_cache_nodes      = 3
-  port                 = 6379
+resource "aws_elasticache_subnet_group" "session_redis_cache_subnets" {
+  name       = trimsuffix(substr("${local.name_prefix}-session-redis-cache-subnets", 0, 255), "-")
+  subnet_ids = [aws_subnet.private_app_subnet.id, aws_subnet.private_app_subnet_b.id]
+}
+
+# Redis with more than one node: a primary plus replicas with automatic failover
+resource "aws_elasticache_replication_group" "session_redis_cache" {
+  replication_group_id       = trimsuffix(substr("${local.name_prefix}-session-redis-cache", 0, 40), "-")
+  description                = "session_redis_cache (3 nodes)"
+  engine                     = "redis"
+  node_type                  = "cache.r6g.large"
+  num_cache_clusters         = 3
+  port                       = 6379
+  automatic_failover_enabled = true
+  multi_az_enabled           = true
+  subnet_group_name    = aws_elasticache_subnet_group.session_redis_cache_subnets.name
+  security_group_ids   = []
 
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-session_redis_cache"

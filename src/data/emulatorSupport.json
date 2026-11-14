@@ -1,31 +1,31 @@
 {
-  "generatedAt": "2026-11-13T23:37:41.397Z",
+  "generatedAt": "2026-11-14T00:47:50.020Z",
   "terraformVersion": "1.10.5",
   "emulatorImageCreated": "2026-11-13T21:02:50.109036177Z",
   "byType": {
     "aws_bedrockagent_agent": {
       "status": "fails",
       "applied": 0,
-      "failed": 1,
+      "failed": 2,
       "errors": [
         "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
       ]
     },
     "aws_iam_role": {
       "status": "verified",
-      "applied": 11,
+      "applied": 18,
       "failed": 0,
       "errors": []
     },
     "aws_iam_role_policy": {
       "status": "verified",
-      "applied": 8,
+      "applied": 10,
       "failed": 0,
       "errors": []
     },
     "aws_kinesis_stream": {
       "status": "fails",
-      "applied": 0,
+      "applied": 1,
       "failed": 1,
       "errors": [
         "increasing Kinesis Stream (lc-dev-telemetry_ingest_stream) retention period: operation error Kinesis: IncreaseStreamRetentionPeriod, https response error StatusCode: 400, RequestID: , InvalidArgumentException: Requested retention period (24 hours) for stream lc-dev-telemetry_ingest_stream can not be shorter than existing retention period (24 hours). Use DecreaseRetentionPeriod API."
@@ -33,25 +33,25 @@
     },
     "aws_lambda_event_source_mapping": {
       "status": "verified",
-      "applied": 2,
+      "applied": 3,
       "failed": 0,
       "errors": []
     },
     "aws_lambda_function": {
       "status": "verified",
-      "applied": 5,
+      "applied": 6,
       "failed": 0,
       "errors": []
     },
     "aws_opensearch_domain": {
       "status": "verified",
-      "applied": 1,
+      "applied": 2,
       "failed": 0,
       "errors": []
     },
     "aws_sfn_state_machine": {
       "status": "verified",
-      "applied": 1,
+      "applied": 2,
       "failed": 0,
       "errors": []
     },
@@ -103,6 +103,14 @@
       "failed": 0,
       "errors": []
     },
+    "aws_instance": {
+      "status": "fails",
+      "applied": 0,
+      "failed": 2,
+      "errors": [
+        "collecting instance settings: couldn't find resource"
+      ]
+    },
     "aws_internet_gateway": {
       "status": "verified",
       "applied": 2,
@@ -146,13 +154,10 @@
       "errors": []
     },
     "aws_security_group": {
-      "status": "fails",
-      "applied": 0,
-      "failed": 2,
-      "errors": [
-        "revoking default IPv4 egress rule for Security Group (sg-0000000000000008f): operation error EC2: RevokeSecurityGroupEgress, https response error StatusCode: 400, RequestID: 00000000-0000-0000-0000-000000000001, api error InvalidPermission.NotFound: The specified rule does not exist in this security group.",
-        "revoking default IPv4 egress rule for Security Group (sg-0000000000000009e): operation error EC2: RevokeSecurityGroupEgress, https response error StatusCode: 400, RequestID: 00000000-0000-0000-0000-000000000001, api error InvalidPermission.NotFound: The specified rule does not exist in this security group."
-      ]
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
     },
     "aws_sns_topic": {
       "status": "verified",
@@ -168,13 +173,13 @@
     },
     "aws_subnet": {
       "status": "verified",
-      "applied": 4,
+      "applied": 12,
       "failed": 0,
       "errors": []
     },
     "aws_vpc": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
@@ -209,16 +214,14 @@
       "errors": []
     },
     "aws_cognito_user_pool": {
-      "status": "fails",
-      "applied": 1,
-      "failed": 1,
-      "errors": [
-        "setting Cognito User Pool (us-west-2_e29c98e09) MFA configuration: operation error Cognito Identity Provider: SetUserPoolMfaConfig, https response error StatusCode: 400, RequestID: 008bc169-fda7-4da3-b173-eb3828d96095, InvalidParameterException: Invalid MFA Configuration given. SMS MFA, Email MFA, or Software Token MFA must be enabled."
-      ]
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
     },
     "aws_cognito_user_pool_client": {
       "status": "verified",
-      "applied": 1,
+      "applied": 2,
       "failed": 0,
       "errors": []
     },
@@ -269,6 +272,94 @@
       "applied": 4,
       "failed": 0,
       "errors": []
+    },
+    "aws_db_instance": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_db_subnet_group": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_ecs_cluster": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_ecs_service": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_ecs_task_definition": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_elasticache_cluster": {
+      "status": "verified",
+      "applied": 1,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_elasticache_subnet_group": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_iam_role_policy_attachment": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_lb": {
+      "status": "fails",
+      "applied": 1,
+      "failed": 1,
+      "errors": [
+        "destroy: deleting ELBv2 Load Balancer (arn:aws:elasticloadbalancing:us-west-2:000000000000:loadbalancer/app/lc-prod-public-ingress-alb/90cb9dedc9ffd8c4): operation error Elastic Load Balancing v2: DeleteLoadBalancer, https response error StatusCode: 400, RequestID: 88147d97-ddf5-4211-840e-8041d245cedb, OperationNotPermitted: Load balancer 'arn:aws:elasticloadbalancing:us-west-2:000000000000:loadbalancer/ap"
+      ]
+    },
+    "aws_lb_listener": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_lb_target_group": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_secretsmanager_secret": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_secretsmanager_secret_version": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_elasticache_replication_group": {
+      "status": "fails",
+      "applied": 0,
+      "failed": 1,
+      "errors": [
+        "destroy: deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: 86f1df5a-d4de-47d0-9980-d60c7274f8f7, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
+      ]
     }
   },
   "runs": [
@@ -276,7 +367,7 @@
       "canvas": "ai-streaming-rag",
       "envId": "dev",
       "ok": false,
-      "durationSeconds": 1263,
+      "durationSeconds": 1259,
       "generalErrors": [],
       "resources": [
         {
@@ -337,17 +428,67 @@
       "canvas": "ai-streaming-rag",
       "envId": "prod",
       "ok": false,
-      "durationSeconds": 0,
-      "generalErrors": [
-        "Command failed: terraform plan -var-file=prod.tfvars -out=tfplan -input=false -no-color"
-      ],
-      "resources": []
+      "durationSeconds": 1257,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_bedrockagent_agent.bedrock_reasoning_agent",
+          "type": "aws_bedrockagent_agent",
+          "applied": false,
+          "error": "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
+        },
+        {
+          "address": "aws_iam_role.bedrock_reasoning_agent_agent_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.embedding_processor_fn_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.rag_orchestrator_sfn_sfn_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.embedding_processor_fn_consume_telemetry_ingest_stream",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_kinesis_stream.telemetry_ingest_stream",
+          "type": "aws_kinesis_stream",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_event_source_mapping.telemetry_ingest_stream_stream_embedding_processor_fn",
+          "type": "aws_lambda_event_source_mapping",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function.embedding_processor_fn",
+          "type": "aws_lambda_function",
+          "applied": true
+        },
+        {
+          "address": "aws_opensearch_domain.vector_knowledge_index",
+          "type": "aws_opensearch_domain",
+          "applied": true
+        },
+        {
+          "address": "aws_sfn_state_machine.rag_orchestrator_sfn",
+          "type": "aws_sfn_state_machine",
+          "applied": true
+        }
+      ]
     },
     {
       "canvas": "catalog-coverage",
       "envId": "dev",
       "ok": false,
-      "durationSeconds": 101,
+      "durationSeconds": 121,
       "generalErrors": [],
       "resources": [
         {
@@ -403,7 +544,8 @@
         {
           "address": "aws_instance.cov_instance",
           "type": "aws_instance",
-          "applied": false
+          "applied": false,
+          "error": "collecting instance settings: couldn't find resource"
         },
         {
           "address": "aws_internet_gateway.cov_internet_gateway",
@@ -443,8 +585,8 @@
         {
           "address": "aws_security_group.cov_security_group",
           "type": "aws_security_group",
-          "applied": false,
-          "error": "revoking default IPv4 egress rule for Security Group (sg-0000000000000008f): operation error EC2: RevokeSecurityGroupEgress, https response error StatusCode: 400, RequestID: 00000000-0000-0000-0000-000000000001, api error InvalidPermission.NotFound: The specified rule does not exist in this security group."
+          "applied": true,
+          "error": "The emulator doesn't create AWS's default egress rule for security groups in a VPC, so the provider's cleanup step fails. The group is created; LocalCloud marks it usable, and applying again finishes the rest."
         },
         {
           "address": "aws_sns_topic.cov_sns_topic",
@@ -477,7 +619,7 @@
       "canvas": "catalog-coverage",
       "envId": "prod",
       "ok": false,
-      "durationSeconds": 74,
+      "durationSeconds": 114,
       "generalErrors": [],
       "resources": [
         {
@@ -533,7 +675,8 @@
         {
           "address": "aws_instance.cov_instance",
           "type": "aws_instance",
-          "applied": false
+          "applied": false,
+          "error": "collecting instance settings: couldn't find resource"
         },
         {
           "address": "aws_internet_gateway.cov_internet_gateway",
@@ -573,8 +716,8 @@
         {
           "address": "aws_security_group.cov_security_group",
           "type": "aws_security_group",
-          "applied": false,
-          "error": "revoking default IPv4 egress rule for Security Group (sg-0000000000000009e): operation error EC2: RevokeSecurityGroupEgress, https response error StatusCode: 400, RequestID: 00000000-0000-0000-0000-000000000001, api error InvalidPermission.NotFound: The specified rule does not exist in this security group."
+          "applied": true,
+          "error": "The emulator doesn't create AWS's default egress rule for security groups in a VPC, so the provider's cleanup step fails. The group is created; LocalCloud marks it usable, and applying again finishes the rest."
         },
         {
           "address": "aws_sns_topic.cov_sns_topic",
@@ -607,7 +750,7 @@
       "canvas": "serverless-ecommerce",
       "envId": "dev",
       "ok": true,
-      "durationSeconds": 133,
+      "durationSeconds": 148,
       "generalErrors": [],
       "resources": [
         {
@@ -740,8 +883,8 @@
     {
       "canvas": "serverless-ecommerce",
       "envId": "prod",
-      "ok": false,
-      "durationSeconds": 131,
+      "ok": true,
+      "durationSeconds": 140,
       "generalErrors": [],
       "resources": [
         {
@@ -772,13 +915,12 @@
         {
           "address": "aws_cognito_user_pool.customer_identity_pool",
           "type": "aws_cognito_user_pool",
-          "applied": false,
-          "error": "setting Cognito User Pool (us-west-2_e29c98e09) MFA configuration: operation error Cognito Identity Provider: SetUserPoolMfaConfig, https response error StatusCode: 400, RequestID: 008bc169-fda7-4da3-b173-eb3828d96095, InvalidParameterException: Invalid MFA Configuration given. SMS MFA, Email MFA, or Software Token MFA must be enabled."
+          "applied": true
         },
         {
           "address": "aws_cognito_user_pool_client.customer_identity_pool_client",
           "type": "aws_cognito_user_pool_client",
-          "applied": false
+          "applied": true
         },
         {
           "address": "aws_dynamodb_table.orders_table",
@@ -875,22 +1017,227 @@
     {
       "canvas": "vpc-ecs-rds-ha",
       "envId": "dev",
-      "ok": false,
-      "durationSeconds": 0,
-      "generalErrors": [
-        "plan failed: only alphanumeric characters and hyphens allowed in \"name\": \"lc-dev-public_ingress_alb\" (aws_lb.public_ingress_alb,) | only alphanumeric characters and hyphens allowed in \"name\" (aws_lb_target_group.public_ingress_alb_tg,) | only lowercase alphanumeric characters and hyphens allowed in \"identifier\" (aws_db_instance.primary_postgres_db,) | invalid value for cluster_id (must contain only lowercase alphanumeric characters and hyphens) (aws_elasticache_cluster.session_redis_cache,)"
-      ],
-      "resources": []
+      "ok": true,
+      "durationSeconds": 189,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_db_instance.primary_postgres_db",
+          "type": "aws_db_instance",
+          "applied": true
+        },
+        {
+          "address": "aws_db_subnet_group.primary_postgres_db_subnets",
+          "type": "aws_db_subnet_group",
+          "applied": true
+        },
+        {
+          "address": "aws_ecs_cluster.core_backend_fargate_cluster",
+          "type": "aws_ecs_cluster",
+          "applied": true
+        },
+        {
+          "address": "aws_ecs_service.core_backend_fargate",
+          "type": "aws_ecs_service",
+          "applied": true
+        },
+        {
+          "address": "aws_ecs_task_definition.core_backend_fargate_task",
+          "type": "aws_ecs_task_definition",
+          "applied": true
+        },
+        {
+          "address": "aws_elasticache_cluster.session_redis_cache",
+          "type": "aws_elasticache_cluster",
+          "applied": true
+        },
+        {
+          "address": "aws_elasticache_subnet_group.session_redis_cache_subnets",
+          "type": "aws_elasticache_subnet_group",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.core_backend_fargate_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.core_backend_fargate_task_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.core_backend_fargate_task_exec_command",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.core_backend_fargate_exec_role",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
+        },
+        {
+          "address": "aws_lb.public_ingress_alb",
+          "type": "aws_lb",
+          "applied": true
+        },
+        {
+          "address": "aws_lb_listener.public_ingress_alb_listener",
+          "type": "aws_lb_listener",
+          "applied": true
+        },
+        {
+          "address": "aws_lb_target_group.public_ingress_alb_tg",
+          "type": "aws_lb_target_group",
+          "applied": true
+        },
+        {
+          "address": "aws_secretsmanager_secret.db_credentials_secret",
+          "type": "aws_secretsmanager_secret",
+          "applied": true
+        },
+        {
+          "address": "aws_secretsmanager_secret_version.db_credentials_secret_val",
+          "type": "aws_secretsmanager_secret_version",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.private_app_subnet",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.private_app_subnet_b",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.public_ingress_subnet",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.public_ingress_subnet_b",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_vpc.primary_vpc",
+          "type": "aws_vpc",
+          "applied": true
+        }
+      ]
     },
     {
       "canvas": "vpc-ecs-rds-ha",
       "envId": "prod",
-      "ok": false,
-      "durationSeconds": 0,
-      "generalErrors": [
-        "Command failed: terraform plan -var-file=prod.tfvars -out=tfplan -input=false -no-color"
-      ],
-      "resources": []
+      "ok": true,
+      "durationSeconds": 198,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_db_instance.primary_postgres_db",
+          "type": "aws_db_instance",
+          "applied": true
+        },
+        {
+          "address": "aws_db_subnet_group.primary_postgres_db_subnets",
+          "type": "aws_db_subnet_group",
+          "applied": true
+        },
+        {
+          "address": "aws_ecs_cluster.core_backend_fargate_cluster",
+          "type": "aws_ecs_cluster",
+          "applied": true
+        },
+        {
+          "address": "aws_ecs_service.core_backend_fargate",
+          "type": "aws_ecs_service",
+          "applied": true
+        },
+        {
+          "address": "aws_ecs_task_definition.core_backend_fargate_task",
+          "type": "aws_ecs_task_definition",
+          "applied": true
+        },
+        {
+          "address": "aws_elasticache_replication_group.session_redis_cache",
+          "type": "aws_elasticache_replication_group",
+          "applied": true,
+          "destroyError": "deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: 86f1df5a-d4de-47d0-9980-d60c7274f8f7, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
+        },
+        {
+          "address": "aws_elasticache_subnet_group.session_redis_cache_subnets",
+          "type": "aws_elasticache_subnet_group",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.core_backend_fargate_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.core_backend_fargate_task_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.core_backend_fargate_exec_role",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
+        },
+        {
+          "address": "aws_lb.public_ingress_alb",
+          "type": "aws_lb",
+          "applied": true,
+          "destroyError": "deleting ELBv2 Load Balancer (arn:aws:elasticloadbalancing:us-west-2:000000000000:loadbalancer/app/lc-prod-public-ingress-alb/90cb9dedc9ffd8c4): operation error Elastic Load Balancing v2: DeleteLoadBalancer, https response error StatusCode: 400, RequestID: 88147d97-ddf5-4211-840e-8041d245cedb, OperationNotPermitted: Load balancer 'arn:aws:elasticloadbalancing:us-west-2:000000000000:loadbalancer/ap"
+        },
+        {
+          "address": "aws_lb_listener.public_ingress_alb_listener",
+          "type": "aws_lb_listener",
+          "applied": true
+        },
+        {
+          "address": "aws_lb_target_group.public_ingress_alb_tg",
+          "type": "aws_lb_target_group",
+          "applied": true
+        },
+        {
+          "address": "aws_secretsmanager_secret.db_credentials_secret",
+          "type": "aws_secretsmanager_secret",
+          "applied": true
+        },
+        {
+          "address": "aws_secretsmanager_secret_version.db_credentials_secret_val",
+          "type": "aws_secretsmanager_secret_version",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.private_app_subnet",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.private_app_subnet_b",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.public_ingress_subnet",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_subnet.public_ingress_subnet_b",
+          "type": "aws_subnet",
+          "applied": true
+        },
+        {
+          "address": "aws_vpc.primary_vpc",
+          "type": "aws_vpc",
+          "applied": true
+        }
+      ]
     }
   ]
 }

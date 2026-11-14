@@ -82,6 +82,8 @@ interface ResourceResult {
   applied: boolean;
   error?: string;
   destroyError?: string;
+  /** Destroy refused because the config asks for it (deletion protection); not a failure. */
+  destroyBlocked?: string;
 }
 
 /** Streams `terraform <args> -json`, collecting per-resource outcomes and error diagnostics. */
@@ -188,6 +190,8 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
 
     // Which resources this canvas declares (counts and helpers included)
     const planned = new Map<string, string>();
+    // AWS-side names per resource, to attribute errors that Terraform reports without an address
+    const awsNames = new Map<string, string[]>();
     try {
       execFileSync('terraform', ['plan', `-var-file=${envId}.tfvars`, '-out=tfplan', '-input=false', '-no-color'], {
         cwd: workDir,
@@ -202,7 +206,17 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
       throw new Error(`plan failed: ${(errors.length ? errors : [text.trim().slice(-600)]).slice(0, 4).join(' | ')}`);
     }
     const plan = JSON.parse(execFileSync('terraform', ['show', '-json', 'tfplan'], { cwd: workDir, env: tfEnv, maxBuffer: 256 * 1024 * 1024 }).toString());
-    for (const rc of plan.resource_changes || []) if (rc.mode === 'managed') planned.set(rc.address, rc.type);
+    for (const rc of plan.resource_changes || []) {
+      if (rc.mode !== 'managed') continue;
+      planned.set(rc.address, rc.type);
+      const after = rc.change?.after || {};
+      awsNames.set(
+        rc.address,
+        ['name', 'identifier', 'cluster_id', 'replication_group_id', 'bucket', 'function_name', 'domain_name']
+          .map((k) => after[k])
+          .filter((v): v is string => typeof v === 'string' && v.length > 3)
+      );
+    }
 
     log(`applying ${planned.size} resources`);
     const apply = await runTerraformJson(workDir, ['apply', '-auto-approve', '-input=false', 'tfplan'], tfEnv, 20 * 60 * 1000);
@@ -233,8 +247,27 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
     if (!keep) {
       const destroy = await runTerraformJson(workDir, ['destroy', '-auto-approve', '-input=false', `-var-file=${envId}.tfvars`], tfEnv, 20 * 60 * 1000);
       log(`destroy exit ${destroy.code}`);
-      for (const r of results) if (destroy.errors.has(r.address)) r.destroyError = destroy.errors.get(r.address);
-      if (destroy.code !== 0 && destroy.errors.size === 0) apply.general.push(`destroy: ${destroy.general.join(' ').slice(0, 400)}`);
+      // Destroy diagnostics often come without an address: match them to resources by AWS name,
+      // and a single leftover message to a single leftover resource
+      const unexplained = [...destroy.errors].filter(([, msg]) => msg === 'apply errored').map(([addr]) => addr);
+      const messages = [...destroy.general];
+      for (const addr of [...unexplained]) {
+        const idx = messages.findIndex((m) => (awsNames.get(addr) || []).some((n) => m.includes(n)));
+        if (idx === -1) continue;
+        destroy.errors.set(addr, messages[idx].replace(/\s+/g, ' '));
+        messages.splice(idx, 1);
+        unexplained.splice(unexplained.indexOf(addr), 1);
+      }
+      if (unexplained.length === 1 && messages.length === 1) destroy.errors.set(unexplained[0], messages[0].replace(/\s+/g, ' '));
+      else apply.general.push(...messages.map((g) => `destroy: ${g.slice(0, 400)}`));
+
+      for (const r of results) {
+        const msg = destroy.errors.get(r.address);
+        if (!msg) continue;
+        // Classify on the full text: the reason often comes after a long ARN
+        if (/deletion protection is enabled|DeletionProtection/i.test(msg)) r.destroyBlocked = 'deletion protection';
+        else r.destroyError = msg.slice(0, 400);
+      }
     }
 
     return {
