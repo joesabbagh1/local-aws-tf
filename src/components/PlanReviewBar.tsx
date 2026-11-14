@@ -18,20 +18,23 @@ export function PlanReviewBar() {
   const plan = useCloudStore((s) => (s.pendingPlan?.envId === s.activeEnv ? s.pendingPlan : null));
   const isRunningCommand = useCloudStore((s) => s.isRunningCommand);
   const runningCommand = useCloudStore((s) => s.runningCommand);
-  const requestApply = useCloudStore((s) => s.requestApply);
+  const applyReviewedPlan = useCloudStore((s) => s.applyReviewedPlan);
   const discardPlan = useCloudStore((s) => s.discardPlan);
 
   if (!plan) return null;
 
   const hasChanges = planHasChanges(plan);
   const { add, change, destroy } = plan.counts;
+  const isDestroy = plan.mode === 'destroy';
 
   return (
     <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 max-w-[calc(100%-24px)] rounded-lg bg-raised border border-line-strong shadow-xl shadow-black/40">
       <div className="h-11 pl-4 pr-2 flex items-center gap-4">
         {hasChanges ? (
           <>
-            <span className="text-[14px] text-fg whitespace-nowrap">Plan for {activeEnv}</span>
+            <span className="text-[14px] text-fg whitespace-nowrap">
+              {isDestroy ? `Destroy ${activeEnv}` : `Plan for ${activeEnv}`}
+            </span>
             <span className="flex items-center gap-3 font-mono text-xs whitespace-nowrap">
               <span className={add ? 'text-ok' : 'text-fg-faint'}>+{add} add</span>
               <span className={change ? 'text-warn' : 'text-fg-faint'}>~{change} change</span>
@@ -41,16 +44,29 @@ export function PlanReviewBar() {
               <Button variant="ghost" disabled={isRunningCommand} onClick={discardPlan}>
                 Discard
               </Button>
-              <Button variant="primary" disabled={isRunningCommand} onClick={() => requestApply(activeEnv)}>
+              <Button
+                variant="primary"
+                disabled={isRunningCommand}
+                onClick={applyReviewedPlan}
+                className={cn(isDestroy && 'bg-err text-base hover:bg-err/85')}
+              >
                 {runningCommand === 'apply' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Apply
+                {isDestroy ? `Destroy ${destroy} resource${destroy === 1 ? '' : 's'}` : 'Apply'}
               </Button>
             </span>
           </>
         ) : (
           <>
             <span className="text-[14px] text-fg-muted whitespace-nowrap">
-              No changes. <span className="text-fg">{activeEnv}</span> already matches the canvas.
+              {isDestroy ? (
+                <>
+                  Nothing to destroy in <span className="text-fg">{activeEnv}</span>.
+                </>
+              ) : (
+                <>
+                  No changes. <span className="text-fg">{activeEnv}</span> already matches the canvas.
+                </>
+              )}
             </span>
             <Button variant="ghost" onClick={discardPlan}>
               Dismiss

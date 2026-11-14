@@ -30,6 +30,7 @@ import {
 } from '../utils/terraformCompiler';
 import { AWS_EXPORT_USER_FILES } from '../utils/awsExport';
 import { statusFromState } from '../utils/terraformState';
+import { checkConnection } from '../utils/connectionRules';
 import { parseTerraformHclToCanvas, type HclImportResult } from '../utils/hclImporter';
 import { toProjectFile, withRuntimeStateFrom } from '../utils/projectFile';
 import {
@@ -63,6 +64,8 @@ export type TerraformCommand = 'init' | 'validate' | 'plan' | 'apply' | 'destroy
 /** A plan that has been run but not applied yet; the canvas shows it until the design changes. */
 export interface PendingPlan extends PlanSummary {
   envId: EnvironmentId;
+  /** A normal plan, or `terraform plan -destroy` waiting for its own confirmation. */
+  mode: 'apply' | 'destroy';
   /** Compiled Terraform at plan time. A different value means the plan no longer matches the canvas. */
   fingerprint: string;
 }
@@ -173,10 +176,14 @@ interface CloudStudioState {
   runTerraformCommand: (
     command: TerraformCommand,
     envId?: EnvironmentId,
-    options?: { usePlan?: boolean }
+    options?: { usePlan?: boolean; destroyPlan?: boolean }
   ) => Promise<void>;
   /** Plans first; applies only a plan that was reviewed and still matches the canvas. */
   requestApply: (envId?: EnvironmentId) => Promise<void>;
+  /** Plans a destroy, so the canvas shows what goes before anything is deleted. */
+  requestDestroy: (envId?: EnvironmentId) => Promise<void>;
+  /** Applies the plan under review (apply or destroy), if it still matches the canvas. */
+  applyReviewedPlan: () => Promise<void>;
   discardPlan: () => void;
   loadProjectFromDisk: () => Promise<void>;
   /** Node status and outputs from each environment's Terraform state (all environments by default). */
@@ -442,41 +449,13 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       onConnect: (connection: Connection) => {
-        get().pushHistory();
         const srcNode = get().nodes.find((n) => n.id === connection.source);
         const dstNode = get().nodes.find((n) => n.id === connection.target);
-
-        let relationshipType: NonNullable<CloudEdge['data']>['relationshipType'] = 'data_flow';
-        let label = 'Connects To';
-
-        if (srcNode && dstNode) {
-          const sType = srcNode.data.serviceType;
-          const dType = dstNode.data.serviceType;
-          if (sType === 'aws_vpc' || sType === 'aws_subnet' || sType === 'aws_security_group') {
-            relationshipType = 'network_attachment';
-            label = 'VPC Network';
-          } else if (
-            sType === 'aws_apigatewayv2_api' ||
-            sType === 'aws_sqs_queue' ||
-            sType === 'aws_sns_topic' ||
-            sType === 'aws_kinesis_stream' ||
-            sType === 'aws_cloudwatch_event_bus'
-          ) {
-            relationshipType = 'event_trigger';
-            label = 'Event Trigger';
-          } else if (
-            dType === 'aws_dynamodb_table' ||
-            dType === 'aws_s3_bucket' ||
-            dType === 'aws_secretsmanager_secret' ||
-            dType === 'aws_kms_key'
-          ) {
-            relationshipType = 'iam_grant';
-            label = 'IAM Policy & Data';
-          } else if (sType === 'aws_lb' || sType === 'aws_cloudfront_distribution') {
-            relationshipType = 'target_route';
-            label = 'Route Traffic';
-          }
-        }
+        // The canvas blocks these while dragging; this guards every other caller
+        const check = checkConnection(srcNode, dstNode, get().edges);
+        if (!check.ok) return;
+        get().pushHistory();
+        const { relationshipType, label } = check;
 
         const newEdge: CloudEdge = {
           ...connection,
@@ -967,14 +946,36 @@ export const useCloudStore = create<CloudStudioState>()(
       requestApply: async (targetEnvId) => {
         const envId = targetEnvId || get().activeEnv;
         const plan = get().pendingPlan;
+        // Only ever applies a reviewed *apply* plan; a pending destroy plan needs its own button
         const reviewed =
-          plan && plan.envId === envId && planHasChanges(plan) && plan.fingerprint === planFingerprint(get(), envId);
+          plan &&
+          plan.envId === envId &&
+          plan.mode === 'apply' &&
+          planHasChanges(plan) &&
+          plan.fingerprint === planFingerprint(get(), envId);
         if (reviewed) {
           await get().runTerraformCommand('apply', envId, { usePlan: true });
         } else {
           set({ rightTab: 'emulator' });
           await get().runTerraformCommand('plan', envId);
         }
+      },
+
+      requestDestroy: async (targetEnvId) => {
+        const envId = targetEnvId || get().activeEnv;
+        set({ rightTab: 'emulator' });
+        await get().runTerraformCommand('plan', envId, { destroyPlan: true });
+      },
+
+      applyReviewedPlan: async () => {
+        const plan = get().pendingPlan;
+        if (!plan || !planHasChanges(plan)) return;
+        if (plan.fingerprint !== planFingerprint(get(), plan.envId)) {
+          set({ pendingPlan: null });
+          get().appendTerminalLog(`[${plan.envId.toUpperCase()}] The canvas changed since this plan; plan again.`);
+          return;
+        }
+        await get().runTerraformCommand('apply', plan.envId, { usePlan: true });
       },
 
       discardPlan: () => set({ pendingPlan: null }),
@@ -995,6 +996,7 @@ export const useCloudStore = create<CloudStudioState>()(
         }));
         const fingerprint = planFingerprint(get(), envId);
         let planChanges: PlanResourceChange[] | null = null;
+        let planWasStale = false;
 
         const interimState: ProvisioningState | undefined =
           command === 'apply' || command === 'destroy'
@@ -1071,6 +1073,7 @@ export const useCloudStore = create<CloudStudioState>()(
               port: profile.emulatorPort,
               region: profile.region,
               usePlan: options?.usePlan === true,
+              destroy: command === 'plan' && options?.destroyPlan === true,
             }),
           });
           if (!res.body) throw new Error(`HTTP ${res.status}`);
@@ -1086,6 +1089,7 @@ export const useCloudStore = create<CloudStudioState>()(
             for (const line of lines) {
               const exitMatch = line.match(/^__LC_EXIT__:(-?\d+)$/);
               if (exitMatch) exitCode = Number(exitMatch[1]);
+              else if (line === '__LC_PLAN_STALE__') planWasStale = true;
               else if (line.startsWith('__LC_PLAN__:')) {
                 try {
                   planChanges = JSON.parse(line.slice('__LC_PLAN__:'.length));
@@ -1106,7 +1110,8 @@ export const useCloudStore = create<CloudStudioState>()(
           nodes: withProvisioningState(state.nodes, envId, (n, current) => {
             if (n.data.envEnabled?.[envId] === false || settled.has(n.id)) return undefined;
             if (current !== interimState) return undefined;
-            if (!ok) return command === 'plan' ? (previousStates[n.id] ?? 'unapplied') : 'failed';
+            // A refused stale plan ran nothing, so nothing failed
+            if (!ok) return command === 'plan' || planWasStale ? (previousStates[n.id] ?? 'unapplied') : 'failed';
             if (command === 'apply') return 'provisioned';
             if (command === 'destroy') return 'unapplied';
             return previousStates[n.id] ?? 'unapplied';
@@ -1116,8 +1121,13 @@ export const useCloudStore = create<CloudStudioState>()(
           runningEnv: null,
           pendingPlan:
             command === 'plan' && ok && planChanges
-              ? { envId, fingerprint, ...summarizePlan(planChanges, state.nodes, envId) }
-              : command === 'apply' && state.pendingPlan?.envId === envId
+              ? {
+                  envId,
+                  mode: options?.destroyPlan ? 'destroy' : 'apply',
+                  fingerprint,
+                  ...summarizePlan(planChanges, state.nodes, envId),
+                }
+              : (command === 'apply' || planWasStale) && state.pendingPlan?.envId === envId
                 ? null
                 : state.pendingPlan,
         }));

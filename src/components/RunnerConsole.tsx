@@ -30,6 +30,7 @@ export function RunnerConsole() {
   const controlEmulatorContainer = useCloudStore((s) => s.controlEmulatorContainer);
   const runTerraformCommand = useCloudStore((s) => s.runTerraformCommand);
   const requestApply = useCloudStore((s) => s.requestApply);
+  const requestDestroy = useCloudStore((s) => s.requestDestroy);
   const clearTerminalLogs = useCloudStore((s) => s.clearTerminalLogs);
 
   const env = environments[activeEnv];
@@ -41,14 +42,10 @@ export function RunnerConsole() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [terminalLogs.length]);
 
+  // Apply and destroy both show their plan on the canvas first; nothing changes until it's confirmed there
   const runTf = (command: (typeof TF_ACTIONS)[number]['command']) => {
-    if (
-      command === 'destroy' &&
-      !window.confirm(`Destroy every resource in ${env.name} (port ${env.emulatorPort})?`)
-    ) {
-      return;
-    }
     if (command === 'apply') requestApply(activeEnv);
+    else if (command === 'destroy') requestDestroy(activeEnv);
     else runTerraformCommand(command, activeEnv);
   };
 

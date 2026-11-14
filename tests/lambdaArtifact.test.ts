@@ -76,3 +76,29 @@ Error: creating RDS DB Instance: InvalidParameterValue
     expect(securityGroupEgressQuirks(output)).toEqual(['aws_security_group.app_sg']);
   });
 });
+
+describe('planInputsHash', () => {
+  it('changes when a Lambda zip or a Terraform file changes, and only then', async () => {
+    const { planInputsHash, buildLambdaArtifact } = await import('../server/api');
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'lc-plan-'));
+    const envDir = path.join(project, 'env');
+    const fn = path.join(project, 'fn');
+    fs.mkdirSync(fn, { recursive: true });
+    fs.mkdirSync(envDir, { recursive: true });
+    fs.writeFileSync(path.join(envDir, 'main.tf'), 'resource "x" "y" {}\n');
+    fs.writeFileSync(path.join(fn, 'index.mjs'), 'export const handler = () => 1;\n');
+    const art = { envId: 'dev', resourceName: 'f', runtime: 'nodejs20.x', handler: 'index.handler', sourceDir: 'fn' };
+
+    await buildLambdaArtifact(envDir, project, art);
+    const reviewed = planInputsHash(envDir);
+    // Sync before apply rebuilds the zip; unchanged code must keep the plan valid
+    await buildLambdaArtifact(envDir, project, art);
+    expect(planInputsHash(envDir)).toBe(reviewed);
+
+    fs.appendFileSync(path.join(fn, 'index.mjs'), '// edited after review\n');
+    await buildLambdaArtifact(envDir, project, art);
+    expect(planInputsHash(envDir)).not.toBe(reviewed);
+
+    fs.rmSync(project, { recursive: true, force: true });
+  });
+});

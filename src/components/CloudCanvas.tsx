@@ -1,10 +1,13 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
   Controls,
   MiniMap,
   BackgroundVariant,
+  type Connection,
+  type Edge,
+  type FinalConnectionState,
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -16,6 +19,7 @@ import { CARD_WIDTH } from '../utils/canvasLayout';
 import type { CloudNode, CloudEdge } from '../types/cloud';
 import { Button } from './ui';
 import { PlanReviewBar } from './PlanReviewBar';
+import { checkConnection } from '../utils/connectionRules';
 
 const EDGE_COLORS: Record<string, string> = {
   event_trigger: '#D4945A',
@@ -102,6 +106,38 @@ export function CloudCanvas() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  // Why the last attempted connection was refused, shown briefly over the canvas
+  const [connectionHint, setConnectionHint] = useState<string | null>(null);
+  const hintTimer = useRef<ReturnType<typeof setTimeout>>();
+  const showHint = (text: string) => {
+    setConnectionHint(text);
+    clearTimeout(hintTimer.current);
+    hintTimer.current = setTimeout(() => setConnectionHint(null), 4000);
+  };
+
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge) => {
+      const { nodes: allNodes, edges: allEdges } = useCloudStore.getState();
+      return checkConnection(
+        allNodes.find((n) => n.id === connection.source),
+        allNodes.find((n) => n.id === connection.target),
+        allEdges
+      ).ok;
+    },
+    []
+  );
+
+  const onConnectEnd = useCallback((_event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
+    if (state.isValid !== false || !state.fromNode || !state.toNode) return;
+    // Dragging from a node's input handle draws the edge backwards
+    const reversed = state.fromHandle?.type === 'target';
+    const { nodes: allNodes, edges: allEdges } = useCloudStore.getState();
+    const from = allNodes.find((n) => n.id === (reversed ? state.toNode!.id : state.fromNode!.id));
+    const to = allNodes.find((n) => n.id === (reversed ? state.fromNode!.id : state.toNode!.id));
+    const check = checkConnection(from, to, allEdges);
+    if (!check.ok) showHint(check.reason);
+  }, []);
+
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -168,6 +204,15 @@ export function CloudCanvas() {
 
       <PlanReviewBar />
 
+      {connectionHint && (
+        <div
+          role="status"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 max-w-[min(520px,calc(100%-24px))] px-3.5 py-2 rounded-md bg-raised border border-line-strong text-xs text-fg-muted shadow-lg shadow-black/40"
+        >
+          {connectionHint}
+        </div>
+      )}
+
       {/* Empty canvas */}
       {nodes.length === 0 && (
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
@@ -199,6 +244,8 @@ export function CloudCanvas() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        isValidConnection={isValidConnection}
+        onConnectEnd={onConnectEnd}
         onNodeDragStart={onNodeDragStart}
         onNodeDragStop={(_e, _node, dragged) => onNodeDragStop(dragged.map((n) => n.id))}
         deleteKeyCode={null}

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { S3Client, ListBucketsCommand, ListObjectsV2Command, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { DynamoDBClient, ListTablesCommand, ScanCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { SQSClient, ListQueuesCommand, SendMessageCommand, ReceiveMessageCommand } from '@aws-sdk/client-sqs';
@@ -19,6 +20,32 @@ export const PROJECT_FILE = 'localcloud.json';
 /** Output folders per compile target: terraform-out runs on the emulator, terraform-aws is the export. */
 const OUTPUT_DIRS = { emulator: 'terraform-out', aws: 'terraform-aws' } as const;
 const PLAN_FILE = '.localcloud.tfplan';
+/** Hash of what a saved plan was made from, so a stale plan is never applied. */
+const PLAN_INPUTS_FILE = '.localcloud.tfplan.inputs';
+
+/**
+ * Everything a plan is made from: the Terraform files and the Lambda zips (whose contents can change
+ * without the canvas changing, e.g. a Lambda code folder). Zips are deterministic, so equal hash
+ * means equal inputs.
+ */
+export function planInputsHash(envDir: string): string {
+  const hash = crypto.createHash('sha256');
+  const files = fs
+    .readdirSync(envDir)
+    .filter((f) => f.endsWith('.tf') || f.endsWith('.tfvars'))
+    .map((f) => path.join(envDir, f));
+  const artifacts = path.join(envDir, 'artifacts');
+  if (fs.existsSync(artifacts)) {
+    files.push(...fs.readdirSync(artifacts).filter((f) => f.endsWith('.zip')).map((f) => path.join(artifacts, f)));
+  }
+  for (const file of files.sort()) {
+    hash.update(path.relative(envDir, file));
+    hash.update('\u0000');
+    hash.update(fs.readFileSync(file));
+    hash.update('\u0000');
+  }
+  return hash.digest('hex');
+}
 
 const ENV_IDS = new Set(['dev', 'testing', 'staging', 'prod']);
 const TERRAFORM_COMMANDS = new Set(['init', 'validate', 'plan', 'apply', 'destroy']);
@@ -600,7 +627,9 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
     },
 
     // 5. Streaming Terraform runner. Plain-text chunks, terminated by "__LC_EXIT__:<code>".
-    //    A successful plan also emits one "__LC_PLAN__:<json>" line with its resource changes.
+    //    A successful plan also emits one "__LC_PLAN__:<json>" line with its resource changes, and
+    //    applying a plan whose inputs changed since review emits "__LC_PLAN_STALE__" and stops.
+    //    `destroy: true` with `plan` makes a destroy plan, applied like any other.
     '/api/terraform/run': async (req, res) => {
       if (req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed' }, 405);
 
@@ -634,14 +663,39 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
       }
 
       const planPath = path.join(envDir, PLAN_FILE);
+      const planInputsPath = path.join(envDir, PLAN_INPUTS_FILE);
+      const discardPlan = () => {
+        fs.rmSync(planPath, { force: true });
+        fs.rmSync(planInputsPath, { force: true });
+      };
       // Applying the saved plan runs exactly what was reviewed on the canvas
       const applySavedPlan = command === 'apply' && body.usePlan === true && fs.existsSync(planPath);
-      if (command !== 'apply' || !applySavedPlan) fs.rmSync(planPath, { force: true });
+      if (command !== 'apply' || !applySavedPlan) discardPlan();
+
+      // The canvas can't see inside Lambda code folders; refuse a plan whose inputs changed since review
+      if (applySavedPlan) {
+        const reviewed = fs.existsSync(planInputsPath) ? fs.readFileSync(planInputsPath, 'utf-8').trim() : '';
+        if (reviewed !== planInputsHash(envDir)) {
+          discardPlan();
+          res.write('The Terraform files or Lambda code changed since this plan was reviewed. Nothing was applied; plan again.\n');
+          res.write('\n__LC_PLAN_STALE__\n');
+          return finish(1);
+        }
+      }
 
       const varFile = `-var-file=${envId}.tfvars`;
       const steps: string[][] = [['init', '-no-color', '-input=false']];
       if (command === 'validate') steps.push(['validate', '-no-color']);
-      if (command === 'plan') steps.push(['plan', varFile, `-out=${PLAN_FILE}`, '-no-color', '-input=false']);
+      if (command === 'plan') {
+        steps.push([
+          'plan',
+          ...(body.destroy === true ? ['-destroy'] : []),
+          varFile,
+          `-out=${PLAN_FILE}`,
+          '-no-color',
+          '-input=false',
+        ]);
+      }
       if (command === 'apply') {
         steps.push(
           applySavedPlan
@@ -681,7 +735,7 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
         active = null;
         if (code !== 0) {
           if (command === 'apply') {
-            fs.rmSync(planPath, { force: true });
+            discardPlan();
             const quirks = securityGroupEgressQuirks(applyOutput);
             for (const addr of quirks) {
               const untainted = await runCommand('terraform', ['untaint', '-no-color', addr], { cwd: envDir, env: awsEnv });
@@ -697,10 +751,11 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
       }
 
       if (command === 'plan') {
+        fs.writeFileSync(planInputsPath, planInputsHash(envDir));
         const changes = await readPlanChanges(envDir, awsEnv);
         if (changes) res.write(`\n__LC_PLAN__:${JSON.stringify(changes)}\n`);
       }
-      if (command === 'apply') fs.rmSync(planPath, { force: true });
+      if (command === 'apply') discardPlan();
       finish(0);
     },
 

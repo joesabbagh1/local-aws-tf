@@ -31,7 +31,9 @@ The canvas is saved to `localcloud.json` in the project directory and Terraform 
 - **Status**: whether a resource is applied comes from each environment's Terraform state (`terraform-out/environments/<env>/terraform.tfstate`), read on load and after every apply or destroy, along with its outputs.
 - **Emulator support**: each service shows whether it applied and destroyed cleanly in the last `npm run test:emulator`, failed, or was never tested. Failures also appear in the Audit tab.
 - **Export for AWS**: writes `terraform-aws/environments/<env>/` for real accounts: no emulator endpoints or credentials, S3 remote state (`backend.tf`, with settings in `backend.tfbackend`), the latest Amazon Linux 2023 image instead of a placeholder AMI, and `vpc_id` / `subnet_ids` inputs for resources that have no VPC or Subnet on the canvas. The export lists anything to fix first, such as a subnet whose availability zone is in another region. `backend.tfbackend` is written once and never overwritten, so fill it in and commit the folder. The Terraform tab can preview either output.
-- **Plan before apply**: **Apply** first runs `terraform plan`. The canvas marks each resource as create, change, replace or destroy, and a bar shows the totals. Nothing is applied until you press **Apply** on that bar, which applies exactly the saved plan. Editing the design discards the plan.
+- **Plan before apply**: **Apply** first runs `terraform plan`. The canvas marks each resource as create, change, replace or destroy, and a bar shows the totals. Nothing is applied until you press **Apply** on that bar, which applies exactly the saved plan. Editing the design discards the plan, and so does changing a Lambda's code folder: the server refuses a saved plan whose Terraform files or Lambda zips changed since it was made.
+- **Destroy preview**: **destroy** in the Run tab shows a destroy plan the same way, with its own red confirm button. The top bar's Apply never applies a pending destroy plan.
+- **Connections**: the canvas only accepts connections that mean something (a queue triggering a Lambda, a Lambda reading a table, a load balancer in front of a service). Anything else, like a database "calling" a Lambda or an edge into a VPC, is refused with a short reason.
 - **Data**: browse and poke the deployed resources (S3 objects, DynamoDB items, SQS messages, Lambda invokes).
 - **Audit**: architecture checks per environment and an estimated monthly AWS cost per environment.
 - **Project file**: the canvas saves to `./localcloud.json` as you edit, so it can be committed and diffed. It holds the design only (no selection or provisioning state). Reload the page after pulling changes to it.
@@ -60,9 +62,10 @@ The canvas is saved to `localcloud.json` in the project directory and Terraform 
 ```bash
 npm test                  # compiler golden files, AWS export, plan summary, extra HCL, project file
 npm run validate:golden   # terraform validate on every golden root (needs terraform)
+npm run test:e2e          # browser tests against the built app (run npm run build first; terraform is mocked)
 npm run test:emulator     # apply + destroy every blueprint on a fresh emulator (needs docker + terraform)
 ```
 
-`tests/golden/<target>/<blueprint>/<env>/` holds the Terraform each blueprint compiles to, for the emulator and as the AWS export (plus a small fixture that covers the export's network inputs and AMI lookup). After an intended compiler change, refresh it with `npm test -- -u` and review the diff. CI runs the first two.
+`tests/golden/<target>/<blueprint>/<env>/` holds the Terraform each blueprint compiles to, for the emulator and as the AWS export (plus a small fixture that covers the export's network inputs and AMI lookup). After an intended compiler change, refresh it with `npm test -- -u` and review the diff. CI runs the first three.
 
 `test:emulator` applies each blueprint, plus a canvas with every other catalog service, to a fresh emulator on port 9397 (in dev and prod), then destroys it. It records which resource types work in `src/data/emulatorSupport.json`, which the UI reads. It takes a while and needs Docker, so it is run by hand and the results are committed. Pass a filter (`npm run test:emulator -- serverless --env dev`) to rerun part of it.
