@@ -11,7 +11,7 @@ const tab = (page: Page, name: string) => page.locator('aside nav button', { has
 /** Stands in for terraform: each request to the runner gets the lines `respond` returns. */
 async function mockTerraform(page: Page, respond: (body: any) => string[]) {
   const calls: any[] = [];
-  await page.route('**/api/terraform/run', async (route) => {
+  await page.route('**/terraform/run', async (route) => {
     const body = route.request().postDataJSON();
     calls.push(body);
     await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: `${respond(body).join('\n')}\n` });
@@ -26,10 +26,10 @@ const planLines = (changes: { type: string; name: string; actions: string[] }[])
 ];
 
 test.beforeEach(async ({ page }) => {
-  resetProject();
+  await resetProject();
   await page.goto('/');
-  // The app has loaded the (empty) project and saved its canvas to disk
-  await expect(page.locator('header')).toContainText('localcloud.json');
+  // The app has loaded the (empty) project and saved version 1 of its canvas
+  await expect(page.locator('header')).toContainText('v1');
   await expect.poll(() => fs.existsSync(path.join(E2E_PROJECT_DIR, 'localcloud.json'))).toBe(true);
 });
 

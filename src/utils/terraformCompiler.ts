@@ -7,6 +7,15 @@ import type {
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import { findAncestorOfType } from './canvasLayout';
 
+/**
+ * Base dir for the emulator's per-port credentials and CA, as written into provider.tf.
+ * `~` expands against the terraform process's home, which is wrong when terraform runs inside
+ * the backend's container — there LOCALCLOUD_EMULATOR_DIR carries the host-shared absolute path.
+ */
+function emulatorDir(): string {
+  return process.env.LOCALCLOUD_EMULATOR_DIR || '~/.aws/emulator';
+}
+
 export function resolveNodeConfigForEnv(
   node: CloudNode,
   envId: EnvironmentId
@@ -439,9 +448,9 @@ provider "aws" {
   }
 
   # AWS Emulator local credentials & self-signed CA bundle (~/.aws/emulator/${env.emulatorPort}/)
-  shared_credentials_files = [pathexpand("~/.aws/emulator/\${var.emulator_port}/emulator_credentials")]
-  shared_config_files      = [pathexpand("~/.aws/emulator/\${var.emulator_port}/config")]
-  custom_ca_bundle         = pathexpand("~/.aws/emulator/\${var.emulator_port}/ca.pem")
+  shared_credentials_files = [pathexpand("${emulatorDir()}/\${var.emulator_port}/emulator_credentials")]
+  shared_config_files      = [pathexpand("${emulatorDir()}/\${var.emulator_port}/config")]
+  custom_ca_bundle         = pathexpand("${emulatorDir()}/\${var.emulator_port}/ca.pem")
 
   s3_use_path_style           = true
   skip_credentials_validation = true

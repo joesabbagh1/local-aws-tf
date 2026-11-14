@@ -4,8 +4,21 @@ import path from 'node:path';
 export const E2E_PORT = 4399;
 export const E2E_PROJECT_DIR = path.resolve('node_modules/.cache/localcloud/e2e-project');
 
-/** Resets the project folder the server works in: no saved canvas, a Lambda code folder, and dev state. */
-export function resetProject() {
+/**
+ * Resets the project the server works in: the folder (no saved canvas, a Lambda code folder, dev
+ * state) and its rows in Postgres, so every test starts from a version-0 project again.
+ */
+export async function resetProject() {
+  const databaseUrl = process.env.DATABASE_URL || 'postgres://localcloud:localcloud@127.0.0.1:5432/localcloud';
+  try {
+    const { default: postgres } = await import('postgres');
+    const sql = postgres(databaseUrl, { connect_timeout: 5, max: 1 });
+    await sql`DELETE FROM projects WHERE working_dir = ${E2E_PROJECT_DIR}`;
+    await sql.end();
+  } catch {
+    // Server startup will surface an unreachable database with its own error
+  }
+
   fs.rmSync(E2E_PROJECT_DIR, { recursive: true, force: true });
   const fn = path.join(E2E_PROJECT_DIR, 'functions', 'orders');
   fs.mkdirSync(path.join(fn, 'node_modules', 'left-pad'), { recursive: true });

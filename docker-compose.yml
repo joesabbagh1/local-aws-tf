@@ -1,0 +1,73 @@
+# The whole LocalCloud stack: Postgres + the backend (UI, API, MCP endpoint, terraform, docker).
+#
+#   docker compose up --build -d     →  http://127.0.0.1:5173
+#   docker compose logs -f app
+#
+# How it fits together:
+# · The backend runs terraform INSIDE its container and drives the host's Docker daemon through
+#   the mounted socket — the emulator containers are created on the host like always.
+# · ~/.aws/emulator is mounted at the same absolute path the host uses, so the emulator's
+#   credentials and CA are shared both ways (LOCALCLOUD_EMULATOR_DIR tells the backend).
+# · The emulator publishes 127.0.0.1:9297-9300 on the host with certificates for 127.0.0.1;
+#   the entrypoint forwards the container's loopback to the host so every client in the
+#   container keeps using https://127.0.0.1:<port> unchanged.
+# · Project working dirs live in ./projects (gitignored); the UI's folder paths are container
+#   paths under /projects.
+# · The page is reachable only from this machine: the app binds 0.0.0.0 inside the container,
+#   but the port is published to the host's loopback only.
+#
+# MCP from the host (ZCode, Claude, Cursor …):
+#   npx localcloud-studio mcp --url http://127.0.0.1:5173 --project /projects/infra
+#   (use the container path — the backend resolves it inside the compose network)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: localcloud-postgres
+    environment:
+      POSTGRES_USER: localcloud
+      POSTGRES_PASSWORD: localcloud
+      POSTGRES_DB: localcloud
+    # The app reaches it over the compose network; 127.0.0.1:5434 is for host-run dev
+    # (`DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5434/localcloud npm run dev`)
+    # — 5434 because 5432/5433 are commonly taken by other local Postgres instances.
+    # Inspect with: docker compose exec postgres psql -U localcloud
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - localcloud-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U localcloud -d localcloud"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: localcloud-studio
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://localcloud:localcloud@postgres:5432/localcloud
+      LOCALCLOUD_EMULATOR_DIR: ${HOME}/.aws/emulator
+      # Set to lock programmatic clients (MCP, curl) behind a bearer token: LOCALCLOUD_TOKEN
+      # LOCALCLOUD_TOKEN: change-me
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      # Emulator control: create/start/stop the host's aws-emulator containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Shared emulator credentials + CA, at the exact path the host uses
+      - ${HOME}/.aws/emulator:${HOME}/.aws/emulator
+      # Project working dirs: localcloud.json, terraform-out/, Lambda code folders
+      - ./projects:/projects
+    extra_hosts:
+      # Linux: resolve the host from the container (Docker Desktop has this built in)
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  localcloud-pgdata:

@@ -8,6 +8,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # projectStore integration tests hit a real Postgres
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: localcloud
+          POSTGRES_PASSWORD: localcloud
+          POSTGRES_DB: localcloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U localcloud"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://localcloud:localcloud@127.0.0.1:5432/localcloud
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,6 +34,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+      # The MCP smoke boots the real backend + stdio MCP server against the service Postgres
+      - run: npm run mcp:smoke
 
   terraform-validate:
     runs-on: ubuntu-latest
@@ -42,6 +61,22 @@ jobs:
   e2e:
     # Playwright 1.57 can't install its browser on Ubuntu 26.04 (ubuntu-latest); pin until it's upgraded
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: localcloud
+          POSTGRES_PASSWORD: localcloud
+          POSTGRES_DB: localcloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U localcloud"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://localcloud:localcloud@127.0.0.1:5432/localcloud
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -10,13 +10,39 @@ import { DynamoDBClient, ListTablesCommand, ScanCommand, PutItemCommand } from '
 import { SQSClient, ListQueuesCommand, SendMessageCommand, ReceiveMessageCommand } from '@aws-sdk/client-sqs';
 import { LambdaClient, ListFunctionsCommand, InvokeCommand } from '@aws-sdk/client-lambda';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
+import { DEFAULT_ENVIRONMENTS, AWS_CATEGORIES, AWS_SERVICES_CATALOG } from '../src/data/awsCatalog';
+import { ARCHITECTURE_TEMPLATES } from '../src/data/templates';
+import type { CloudNode, CloudEdge, EnvironmentId, EnvironmentProfile } from '../src/types/cloud';
+import { buildTerraformFiles } from '../src/utils/terraformBundle';
+import { emulatorSupport } from '../src/utils/emulatorSupport';
+import type { ProjectFile } from '../src/utils/projectFile';
+import { applyDesignOp, opMutates } from './services/designOps';
+import { BusyError, DbReady, createSql, withAdvisoryLock, type Sql } from './db';
+import {
+  PROJECT_FILE,
+  deleteProject,
+  diffDocs,
+  ensureProject,
+  getHead,
+  getProject,
+  getVersion,
+  isValidDoc,
+  listProjects,
+  listVersions,
+  reconcileFile,
+  renameProject,
+  restoreVersion,
+  saveDoc,
+  type ProjectRow,
+} from './services/projectStore';
+
+export { PROJECT_FILE };
 
 /**
  * Local API used by the UI: emulator control, Terraform runner, project file and data explorer.
  * Mounted by the Vite dev server (vite.config.ts) and by the standalone CLI (server/cli.ts).
  */
 
-export const PROJECT_FILE = 'localcloud.json';
 /** Output folders per compile target: terraform-out runs on the emulator, terraform-aws is the export. */
 const OUTPUT_DIRS = { emulator: 'terraform-out', aws: 'terraform-aws' } as const;
 const PLAN_FILE = '.localcloud.tfplan';
@@ -52,9 +78,18 @@ const TERRAFORM_COMMANDS = new Set(['init', 'validate', 'plan', 'apply', 'destro
 
 export type EmulatorHealth = { running: boolean; status: string; caExists: boolean };
 
+/**
+ * Where the emulator's per-port credentials and CA live, and the dir mounted into emulator
+ * containers. Overridable with LOCALCLOUD_EMULATOR_DIR when the backend itself runs in a
+ * container and must share the host's dir at the same absolute path (see docker-compose.yml).
+ */
+function emulatorDataDir(): string {
+  return process.env.LOCALCLOUD_EMULATOR_DIR || path.join(os.homedir(), '.aws', 'emulator');
+}
+
 export function checkEmulatorHealth(port: number): Promise<EmulatorHealth> {
   return new Promise((resolve) => {
-    const caPath = path.join(os.homedir(), '.aws', 'emulator', String(port), 'ca.pem');
+    const caPath = path.join(emulatorDataDir(), String(port), 'ca.pem');
     const caExists = fs.existsSync(caPath);
 
     const req = https.get(
@@ -146,8 +181,7 @@ function runCommand(
 }
 
 export function getEmulatorAwsEnv(port: number, region = 'us-east-1'): NodeJS.ProcessEnv {
-  const home = os.homedir();
-  const baseDir = path.join(home, '.aws', 'emulator', String(port));
+  const baseDir = path.join(emulatorDataDir(), String(port));
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AWS_ENDPOINT_URL: `https://127.0.0.1:${port}`,
@@ -170,7 +204,7 @@ export function getEmulatorAwsEnv(port: number, region = 'us-east-1'): NodeJS.Pr
 
 /** SDK client config for one emulator port, using the credentials and CA the emulator writes to ~/.aws/emulator/<port>/. */
 function getEmulatorClientConfig(port: number, region: string) {
-  const baseDir = path.join(os.homedir(), '.aws', 'emulator', String(port));
+  const baseDir = path.join(emulatorDataDir(), String(port));
   const ini = fs.readFileSync(path.join(baseDir, 'emulator_credentials'), 'utf-8');
   const read = (key: string) => ini.match(new RegExp(`^\\s*${key}\\s*=\\s*(\\S+)`, 'm'))?.[1] || '';
   return {
@@ -369,8 +403,10 @@ export async function startEmulatorContainer(
   port: number,
   workDir: string
 ): Promise<{ ok: boolean; output: string; error?: string }> {
-  const home = os.homedir();
-  const emulatorHostDir = path.join(home, '.aws', 'emulator');
+  const emulatorHostDir = emulatorDataDir();
+  // The emulator writes its credentials under $HOME/.aws/emulator; with the default dir that is
+  // this process's home, with an override it is the home that owns the overridden path.
+  const home = path.dirname(path.dirname(emulatorHostDir));
   fs.mkdirSync(emulatorHostDir, { recursive: true });
   fs.mkdirSync(workDir, { recursive: true });
 
@@ -500,13 +536,136 @@ async function readPlanChanges(envDir: string, env: NodeJS.ProcessEnv): Promise<
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<unknown> | unknown;
+type ParamHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  params: Record<string, string>
+) => Promise<unknown> | unknown;
+interface ParamRoute {
+  method: string;
+  parts: string[];
+  handler: ParamHandler;
+}
 
-export function createApiMiddleware(options: { projectDir?: string } = {}) {
-  const projectDir = path.resolve(options.projectDir || process.cwd());
-  const OUT_DIR = path.join(projectDir, OUTPUT_DIRS.emulator);
-  const projectFilePath = path.join(projectDir, PROJECT_FILE);
+/** Thrown by handlers; the dispatcher turns it into a JSON error with its status. */
+class HttpError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
 
-  const routes: Record<string, Handler> = {
+/**
+ * When LOCALCLOUD_TOKEN is set, programmatic clients (no browser Origin — e.g. the MCP server or
+ * curl) must present it as a bearer token. Same-origin browser requests stay open: the local page
+ * has no way to learn the token.
+ */
+function isAuthorized(req: IncomingMessage): boolean {
+  const token = process.env.LOCALCLOUD_TOKEN;
+  if (!token) return true;
+  if (req.headers.origin) return true; // already gated by isLocalRequest's same-origin check
+  return req.headers.authorization === `Bearer ${token}`;
+}
+
+/** Runs tail-capped at 512KB per row: applies can be chatty, the table is for audit not archive. */
+const RUN_LOG_MAX_CHARS = 512 * 1024;
+
+export function createApiMiddleware(options: { databaseUrl?: string; defaultProjectDir?: string; projectDir?: string } = {}) {
+  const sql = options.databaseUrl ? createSql(options.databaseUrl) : null;
+  const dbReady = sql ? new DbReady(sql) : null;
+  const defaultProjectDir = options.defaultProjectDir
+    ? path.resolve(options.defaultProjectDir)
+    : path.resolve(options.projectDir || process.cwd());
+
+  /** DB handle for a request; every project route needs it, so gate with a clear setup error. */
+  const requireDb = (): Sql => {
+    if (!sql || !dbReady) {
+      throw new HttpError(
+        503,
+        'No database configured. Start Postgres (docker compose up -d postgres) and set DATABASE_URL, e.g. postgres://localcloud:localcloud@127.0.0.1:5432/localcloud'
+      );
+    }
+    return sql;
+  };
+
+  const requireProject = async (db: Sql, id: string): Promise<ProjectRow> => {
+    const project = await getProject(db, id);
+    if (!project) throw new HttpError(404, 'Project not found');
+    return project;
+  };
+
+  /** The actor tag recorded on versions/events: explicit for programmatic clients, 'ui' for the page. */
+  const actorOf = (body: any): string =>
+    typeof body?.actor === 'string' && body.actor.trim() ? body.actor.trim().slice(0, 64) : 'ui';
+
+  const recordEvent = async (
+    db: Sql,
+    projectId: string | null,
+    actor: string,
+    action: string,
+    payload?: unknown
+  ) => {
+    await db`INSERT INTO events (project_id, actor, action, payload)
+      VALUES (${projectId}, ${actor}, ${action}, ${payload === undefined ? null : JSON.stringify(payload)}::jsonb)`;
+  };
+
+  /** The project file strips presentation-only profile fields; re-merge the app defaults over the saved ones. */
+  function mergeEnvironments(envs: ProjectFile['environments'] | undefined): Record<EnvironmentId, EnvironmentProfile> {
+    const out = {} as Record<EnvironmentId, EnvironmentProfile>;
+    for (const id of Object.keys(DEFAULT_ENVIRONMENTS) as EnvironmentId[]) {
+      const saved = (envs as Record<string, unknown> | null)?.[id];
+      out[id] = { ...DEFAULT_ENVIRONMENTS[id], ...(saved && typeof saved === 'object' ? saved : {}) } as EnvironmentProfile;
+    }
+    return out;
+  }
+
+  /** Write a compiled bundle into a working dir: .tf files, emulator scripts, deterministic Lambda zips. */
+  async function writeTerraformOutput(
+    target: 'emulator' | 'aws',
+    project: ProjectRow,
+    payload: { files: Record<string, string>; filesIfMissing?: Record<string, string>; lambdaArtifacts?: unknown[] }
+  ) {
+    const baseDir = path.join(project.working_dir, OUTPUT_DIRS[target]);
+    fs.mkdirSync(baseDir, { recursive: true });
+
+    const writtenFiles: string[] = [];
+    const keptFiles: string[] = [];
+    const writeFiles = (files: unknown, onlyIfMissing: boolean) => {
+      if (!files || typeof files !== 'object') return;
+      for (const [relPath, content] of Object.entries(files)) {
+        const safePath = path.resolve(baseDir, relPath);
+        if (!safePath.startsWith(baseDir + path.sep)) continue;
+        if (onlyIfMissing && fs.existsSync(safePath)) {
+          keptFiles.push(path.relative(project.working_dir, safePath));
+          continue;
+        }
+        fs.mkdirSync(path.dirname(safePath), { recursive: true });
+        fs.writeFileSync(safePath, String(content), 'utf-8');
+        if (relPath.endsWith('.sh')) fs.chmodSync(safePath, 0o755);
+        writtenFiles.push(safePath);
+      }
+    };
+    writeFiles(payload.files, false);
+    // Files the user edits after the first export (backend settings) are created once, then left alone
+    writeFiles(payload.filesIfMissing, true);
+
+    const errors: string[] = [];
+    if (Array.isArray(payload.lambdaArtifacts)) {
+      for (const art of payload.lambdaArtifacts as LambdaArtifactRequest[]) {
+        const envId = parseEnvId(art.envId);
+        if (!envId) continue;
+        const built = await buildLambdaArtifact(path.join(baseDir, 'environments', envId), project.working_dir, art);
+        if (built.zipPath) writtenFiles.push(built.zipPath);
+        if (built.error) errors.push(`[${envId}] ${built.error}`);
+      }
+    }
+    return { writtenFiles, keptFiles, errors, outDir: OUTPUT_DIRS[target] };
+  }
+
+  // Routes without path parameters. The emulator endpoints are global: one container per
+  // environment serves every project on that port.
+  const exactRoutes: Record<string, Handler> = {
     // 1. Live health status for all environment ports
     '/api/emulator/status': async (_req, res, url) => {
       const ports = (url.searchParams.get('ports') || '9297,9298,9299,9300')
@@ -523,93 +682,8 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
       sendJson(res, { ok: true, statuses });
     },
 
-    // 2. Project file: the canvas saved next to the Terraform it generates
-    '/api/project': async (req, res) => {
-      if (req.method === 'GET') {
-        if (!fs.existsSync(projectFilePath)) {
-          return sendJson(res, { ok: true, exists: false, file: PROJECT_FILE, projectDir });
-        }
-        try {
-          const project = JSON.parse(fs.readFileSync(projectFilePath, 'utf-8'));
-          return sendJson(res, { ok: true, exists: true, file: PROJECT_FILE, projectDir, project });
-        } catch (err: any) {
-          return sendJson(res, { ok: false, exists: true, file: PROJECT_FILE, error: `${PROJECT_FILE} is not valid JSON: ${err?.message}` });
-        }
-      }
-      if (req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed' }, 405);
-
-      try {
-        const body = await readJsonBody(req);
-        const project = body.project;
-        if (!project || !Array.isArray(project.nodes) || !Array.isArray(project.edges)) {
-          return sendJson(res, { ok: false, error: 'Invalid project' }, 400);
-        }
-        // Write-then-rename so a crash mid-write never leaves a truncated project file
-        const tmpPath = `${projectFilePath}.tmp`;
-        fs.writeFileSync(tmpPath, `${JSON.stringify(project, null, 2)}\n`, 'utf-8');
-        fs.renameSync(tmpPath, projectFilePath);
-        sendJson(res, { ok: true, file: PROJECT_FILE });
-      } catch (err: any) {
-        sendJson(res, { ok: false, error: err?.message || 'Failed to save project' }, 500);
-      }
-    },
-
-    // 3. Write Terraform files + package Lambda zip artifacts, for the emulator (Sync) or the AWS export
-    '/api/terraform/export': async (req, res) => {
-      if (req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed' }, 405);
-
-      try {
-        const payload = await readJsonBody(req);
-        const target = payload.target === 'aws' ? 'aws' : 'emulator';
-        const baseDir = path.join(projectDir, OUTPUT_DIRS[target]);
-        fs.mkdirSync(baseDir, { recursive: true });
-
-        const writtenFiles: string[] = [];
-        const keptFiles: string[] = [];
-        const writeFiles = (files: unknown, onlyIfMissing: boolean) => {
-          if (!files || typeof files !== 'object') return;
-          for (const [relPath, content] of Object.entries(files)) {
-            const safePath = path.resolve(baseDir, relPath);
-            if (!safePath.startsWith(baseDir + path.sep)) continue;
-            if (onlyIfMissing && fs.existsSync(safePath)) {
-              keptFiles.push(path.relative(projectDir, safePath));
-              continue;
-            }
-            fs.mkdirSync(path.dirname(safePath), { recursive: true });
-            fs.writeFileSync(safePath, String(content), 'utf-8');
-            if (relPath.endsWith('.sh')) fs.chmodSync(safePath, 0o755);
-            writtenFiles.push(safePath);
-          }
-        };
-        writeFiles(payload.files, false);
-        // Files the user edits after the first export (backend settings) are created once, then left alone
-        writeFiles(payload.filesIfMissing, true);
-
-        const errors: string[] = [];
-        if (Array.isArray(payload.lambdaArtifacts)) {
-          for (const art of payload.lambdaArtifacts as LambdaArtifactRequest[]) {
-            const envId = parseEnvId(art.envId);
-            if (!envId) continue;
-            const built = await buildLambdaArtifact(path.join(baseDir, 'environments', envId), projectDir, art);
-            if (built.zipPath) writtenFiles.push(built.zipPath);
-            if (built.error) errors.push(`[${envId}] ${built.error}`);
-          }
-        }
-
-        sendJson(res, {
-          ok: true,
-          outDir: OUTPUT_DIRS[target],
-          writtenFiles,
-          keptFiles,
-          errors,
-          timestamp: new Date().toISOString(),
-        });
-      } catch (err: any) {
-        sendJson(res, { ok: false, error: err?.message || 'Failed to write Terraform files' }, 500);
-      }
-    },
-
-    // 4. AWS Emulator container lifecycle (build / start / stop)
+    // 2. AWS Emulator container lifecycle (build / start / stop). Global: one container per env
+    //    serves every project; body.projectId only routes the audit event.
     '/api/emulator/control': async (req, res) => {
       if (req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed' }, 405);
 
@@ -618,184 +692,36 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
         const envId = parseEnvId(body.envId);
         const port = parsePort(body.port);
         if (!envId || !port) return sendJson(res, { ok: false, error: 'Invalid envId or port' }, 400);
+        const action = body.action === 'stop' ? 'stop' : body.action === 'start' ? 'start' : null;
+        if (!action) return sendJson(res, { ok: false, error: `Unknown action: ${body.action}` }, 400);
+
+        // The Dockerfile.emulator build context lives with the requesting project when known
+        let workDir = path.join(defaultProjectDir, OUTPUT_DIRS.emulator);
+        if (typeof body.projectId === 'string' && body.projectId && sql) {
+          const project = await getProject(sql, body.projectId);
+          if (project) workDir = path.join(project.working_dir, OUTPUT_DIRS.emulator);
+        }
 
         const containerName = `localcloud-aws-emulator-${envId}`;
+        const result =
+          action === 'stop'
+            ? { ok: true, output: (await stopEmulatorContainer(containerName)).stdout }
+            : await startEmulatorContainer(containerName, port, workDir).then((r) => ({
+                ok: r.ok,
+                output: r.output,
+                error: r.error,
+              }));
 
-        if (body.action === 'stop') {
-          const result = await stopEmulatorContainer(containerName);
-          return sendJson(res, { ok: true, action: 'stop', output: result.stdout || result.stderr });
+        if (sql && result.ok && typeof body.projectId === 'string' && body.projectId) {
+          await recordEvent(sql, body.projectId, actorOf(body), `emulator.${action}`, { envId, port }).catch(() => {});
         }
-
-        if (body.action !== 'start') {
-          return sendJson(res, { ok: false, error: `Unknown action: ${body.action}` }, 400);
-        }
-
-        const started = await startEmulatorContainer(containerName, port, OUT_DIR);
-        sendJson(res, { ok: started.ok, containerName, port, output: started.output, error: started.error });
+        sendJson(res, { ok: result.ok, action, containerName, port, output: result.output, error: (result as any).error });
       } catch (err: any) {
         sendJson(res, { ok: false, error: err?.message }, 500);
       }
     },
 
-    // 5. Streaming Terraform runner. Plain-text chunks, terminated by "__LC_EXIT__:<code>".
-    //    A successful plan also emits one "__LC_PLAN__:<json>" line with its resource changes, and
-    //    applying a plan whose inputs changed since review emits "__LC_PLAN_STALE__" and stops.
-    //    `destroy: true` with `plan` makes a destroy plan, applied like any other.
-    '/api/terraform/run': async (req, res) => {
-      if (req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed' }, 405);
-
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      const finish = (code: number) => res.end(`\n__LC_EXIT__:${code}\n`);
-
-      let body: any;
-      try {
-        body = await readJsonBody(req);
-      } catch {
-        res.write('Invalid JSON body\n');
-        return finish(1);
-      }
-
-      const envId = parseEnvId(body.envId);
-      const port = parsePort(body.port);
-      const command = String(body.command || 'plan');
-      const region = /^[a-z]{2}(-[a-z]+)+-\d$/.test(String(body.region)) ? String(body.region) : 'us-east-1';
-      if (!envId || !port || !TERRAFORM_COMMANDS.has(command)) {
-        res.write('Invalid envId, port or command\n');
-        return finish(1);
-      }
-
-      const envDir = path.join(OUT_DIR, 'environments', envId);
-      if (!fs.existsSync(envDir)) {
-        res.write(`Environment directory not found at ${envDir}. Sync first.\n`);
-        return finish(1);
-      }
-
-      const planPath = path.join(envDir, PLAN_FILE);
-      const planInputsPath = path.join(envDir, PLAN_INPUTS_FILE);
-      const discardPlan = () => {
-        fs.rmSync(planPath, { force: true });
-        fs.rmSync(planInputsPath, { force: true });
-      };
-      // Applying the saved plan runs exactly what was reviewed on the canvas
-      const applySavedPlan = command === 'apply' && body.usePlan === true && fs.existsSync(planPath);
-      if (command !== 'apply' || !applySavedPlan) discardPlan();
-
-      // The canvas can't see inside Lambda code folders; refuse a plan whose inputs changed since review
-      if (applySavedPlan) {
-        const reviewed = fs.existsSync(planInputsPath) ? fs.readFileSync(planInputsPath, 'utf-8').trim() : '';
-        if (reviewed !== planInputsHash(envDir)) {
-          discardPlan();
-          res.write('The Terraform files or Lambda code changed since this plan was reviewed. Nothing was applied; plan again.\n');
-          res.write('\n__LC_PLAN_STALE__\n');
-          return finish(1);
-        }
-      }
-
-      const varFile = `-var-file=${envId}.tfvars`;
-      const steps: string[][] = [['init', '-no-color', '-input=false']];
-      if (command === 'validate') steps.push(['validate', '-no-color']);
-      if (command === 'plan') {
-        steps.push([
-          'plan',
-          ...(body.destroy === true ? ['-destroy'] : []),
-          varFile,
-          `-out=${PLAN_FILE}`,
-          '-no-color',
-          '-input=false',
-        ]);
-      }
-      if (command === 'apply') {
-        steps.push(
-          applySavedPlan
-            ? ['apply', '-no-color', '-input=false', PLAN_FILE]
-            : ['apply', varFile, '-auto-approve', '-no-color', '-input=false']
-        );
-      }
-      if (command === 'destroy') steps.push(['destroy', varFile, '-auto-approve', '-no-color', '-input=false']);
-
-      const awsEnv = getEmulatorAwsEnv(port, region);
-      let active: ReturnType<typeof spawn> | null = null;
-      let aborted = false;
-      res.on('close', () => {
-        aborted = true;
-        active?.kill('SIGINT');
-      });
-
-      let applyOutput = '';
-      for (const args of steps) {
-        if (aborted) return;
-        res.write(`$ terraform ${args.join(' ')}\n`);
-        const code = await new Promise<number>((resolve) => {
-          const child = spawn('terraform', args, { cwd: envDir, env: awsEnv });
-          active = child;
-          const forward = (chunk: Buffer) => {
-            res.write(chunk);
-            if (args[0] === 'apply') applyOutput += chunk.toString();
-          };
-          child.stdout.on('data', forward);
-          child.stderr.on('data', forward);
-          child.on('error', (err) => {
-            res.write(`${err.message}\n`);
-            resolve(127);
-          });
-          child.on('close', (c) => resolve(c ?? 1));
-        });
-        active = null;
-        if (code !== 0) {
-          if (command === 'apply') {
-            discardPlan();
-            const quirks = securityGroupEgressQuirks(applyOutput);
-            for (const addr of quirks) {
-              const untainted = await runCommand('terraform', ['untaint', '-no-color', addr], { cwd: envDir, env: awsEnv });
-              res.write(
-                untainted.ok
-                  ? `\nNote: ${addr} exists, but an emulator bug (aws/aws-emulator#46) made Terraform mark it failed. LocalCloud marked it usable again. Apply again to create the rest.\n`
-                  : `\nCould not untaint ${addr}: ${untainted.stderr.trim()}\n`
-              );
-            }
-          }
-          return finish(code);
-        }
-      }
-
-      if (command === 'plan') {
-        fs.writeFileSync(planInputsPath, planInputsHash(envDir));
-        const changes = await readPlanChanges(envDir, awsEnv);
-        if (changes) res.write(`\n__LC_PLAN__:${JSON.stringify(changes)}\n`);
-      }
-      if (command === 'apply') discardPlan();
-      finish(0);
-    },
-
-    // 6. What exists in an environment, from its local Terraform state: resources and outputs.
-    //    Read straight from terraform.tfstate, so it works without terraform or a running emulator.
-    '/api/terraform/state': async (_req, res, url) => {
-      const envId = parseEnvId(url.searchParams.get('envId'));
-      if (!envId) return sendJson(res, { ok: false, error: 'Invalid envId' }, 400);
-
-      const statePath = path.join(OUT_DIR, 'environments', envId, 'terraform.tfstate');
-      if (!fs.existsSync(statePath)) return sendJson(res, { ok: true, exists: false, resources: [], outputs: {} });
-      try {
-        const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
-        const resources = (state.resources || [])
-          .filter((r: any) => r?.mode === 'managed' && Array.isArray(r.instances) && r.instances.length > 0)
-          .map((r: any) => ({ type: String(r.type), name: String(r.name) }));
-        const outputs = Object.fromEntries(
-          Object.entries<any>(state.outputs || {}).map(([name, out]) => [
-            name,
-            out?.sensitive ? '(sensitive)' : typeof out?.value === 'string' ? out.value : JSON.stringify(out?.value),
-          ])
-        );
-        sendJson(res, { ok: true, exists: true, resources, outputs });
-      } catch (err: any) {
-        sendJson(res, { ok: false, error: `Could not read ${envId} state: ${err?.message}` });
-      }
-    },
-
-    // 7. Data-plane explorer against the emulator (S3, DynamoDB, SQS, Lambda)
+    // 3. Data-plane explorer against the emulator (S3, DynamoDB, SQS, Lambda)
     '/api/emulator/explore': async (req, res) => {
       if (req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed' }, 405);
 
@@ -833,15 +759,477 @@ export function createApiMiddleware(options: { projectDir?: string } = {}) {
     },
   };
 
-  return function apiMiddleware(req: IncomingMessage, res: ServerResponse, next: () => void) {
-    const url = new URL(req.url || '', 'http://localhost');
-    const handler = routes[url.pathname];
-    if (!handler) return url.pathname.startsWith('/api/') ? sendJson(res, { ok: false, error: 'Not found' }, 404) : next();
-    if (!isLocalRequest(req)) return sendJson(res, { ok: false, error: 'Forbidden' }, 403);
+  // Routes with path parameters. Everything that touches a design, its Terraform or its history
+  // is scoped to one project row.
+  const paramRoutes: ParamRoute[] = [];
+  const on = (method: string, pattern: string, handler: ParamHandler) => {
+    paramRoutes.push({ method, parts: pattern.split('/').filter(Boolean), handler });
+  };
 
-    Promise.resolve(handler(req, res, url)).catch((err) => {
-      if (!res.headersSent) sendJson(res, { ok: false, error: err?.message || 'Internal error' }, 500);
-      else res.end();
+  on('GET', '/api/projects', async (_req, res) => {
+    const db = requireDb();
+    await dbReady!.once();
+    // The folder the server was started in is always a project (adopting an existing
+    // localcloud.json on open), so `npx localcloud-studio ./infra` keeps working.
+    const defaultProject = await ensureProject(db, { workingDir: defaultProjectDir });
+    const projects = await listProjects(db);
+    sendJson(res, { ok: true, projects, defaultProjectId: defaultProject.id });
+  });
+
+  on('POST', '/api/projects', async (req, res) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const body = await readJsonBody(req);
+    if (typeof body.workingDir !== 'string' || !body.workingDir.trim()) {
+      throw new HttpError(400, 'workingDir is required (the folder for terraform-out and Lambda code)');
+    }
+    const project = await ensureProject(db, {
+      workingDir: body.workingDir.trim(),
+      name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : undefined,
     });
+    await recordEvent(db, project.id, actorOf(body), 'project.create', {
+      name: project.name,
+      workingDir: project.working_dir,
+    });
+    sendJson(res, { ok: true, project });
+  });
+
+  on('GET', '/api/projects/:id', async (_req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const project = await requireProject(db, params.id);
+    await reconcileFile(db, project);
+    const head = await getHead(db, project.id);
+    if (!head) return sendJson(res, { ok: true, project, version: 0, exists: false, file: PROJECT_FILE });
+    sendJson(res, { ok: true, project, version: head.version, exists: true, file: PROJECT_FILE, doc: head.doc });
+  });
+
+  on('PATCH', '/api/projects/:id', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const body = await readJsonBody(req);
+    if (typeof body.name !== 'string' || !body.name.trim()) throw new HttpError(400, 'name is required');
+    const renamed = await renameProject(db, params.id, body.name.trim());
+    if (!renamed) throw new HttpError(404, 'Project not found');
+    await recordEvent(db, renamed.id, actorOf(body), 'project.rename', { name: renamed.name });
+    sendJson(res, { ok: true, project: renamed });
+  });
+
+  on('DELETE', '/api/projects/:id', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const body = await readJsonBody(req).catch(() => ({}));
+    const deleted = await deleteProject(db, params.id);
+    if (!deleted) throw new HttpError(404, 'Project not found');
+    await recordEvent(db, null, actorOf(body), 'project.delete', { projectId: params.id });
+    sendJson(res, { ok: true });
+  });
+
+  // Versioned save. baseVersion must match the head; a second writer (another tab, the MCP
+  // server) makes the head move and this returns 409 with the winning document.
+  on('POST', '/api/projects/:id/doc', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const project = await requireProject(db, params.id);
+    const body = await readJsonBody(req);
+    if (!isValidDoc(body.doc)) throw new HttpError(400, 'Invalid project document');
+    const baseVersion = Number(body.baseVersion);
+    if (!Number.isInteger(baseVersion) || baseVersion < 0) throw new HttpError(400, 'Invalid baseVersion');
+
+    const result = await saveDoc(db, project.id, body.doc, {
+      baseVersion,
+      actor: actorOf(body),
+      summary: typeof body.summary === 'string' ? body.summary : undefined,
+    });
+    if (!result.ok) {
+      return sendJson(res, {
+        ok: false,
+        conflict: true,
+        currentVersion: result.currentVersion,
+        doc: result.doc,
+        error: 'The project changed while you were editing. Reload to pick up the newer version.',
+      }, 409);
+    }
+    sendJson(res, { ok: true, version: result.version, noop: result.noop, file: PROJECT_FILE });
+  });
+
+  on('GET', '/api/projects/:id/versions', async (_req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    await requireProject(db, params.id);
+    sendJson(res, { ok: true, versions: await listVersions(db, params.id) });
+  });
+
+  on('GET', '/api/projects/:id/versions/:version', async (_req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    await requireProject(db, params.id);
+    const version = Number(params.version);
+    if (!Number.isInteger(version) || version < 1) throw new HttpError(400, 'Invalid version');
+    const row = await getVersion(db, params.id, version);
+    if (!row) throw new HttpError(404, `Version ${version} not found`);
+    sendJson(res, { ok: true, version: row });
+  });
+
+  on('POST', '/api/projects/:id/versions/:version/restore', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    await requireProject(db, params.id);
+    const body = await readJsonBody(req).catch(() => ({}));
+    const version = Number(params.version);
+    if (!Number.isInteger(version) || version < 1) throw new HttpError(400, 'Invalid version');
+    const result = await restoreVersion(db, params.id, version, actorOf(body));
+    if (!result.ok) throw new HttpError(409, 'Project changed while restoring; try again');
+    sendJson(res, { ok: true, version: result.version });
+  });
+
+  on('GET', '/api/projects/:id/diff', async (_req, res, url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    await requireProject(db, params.id);
+    const from = Number(url.searchParams.get('from'));
+    const to = Number(url.searchParams.get('to'));
+    if (!Number.isInteger(from) || !Number.isInteger(to)) throw new HttpError(400, 'from and to version numbers are required');
+    const fromRow = await getVersion(db, params.id, from);
+    const toRow = await getVersion(db, params.id, to);
+    if (!fromRow || !toRow) throw new HttpError(404, 'Version not found');
+    sendJson(res, { ok: true, diff: diffDocs(fromRow.doc, toRow.doc) });
+  });
+
+  // Server-side compile: head doc → Terraform files + Lambda zips in the project working dir.
+  on('POST', '/api/projects/:id/terraform/sync', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const project = await requireProject(db, params.id);
+    const body = await readJsonBody(req);
+    const target = body.target === 'aws' ? 'aws' : 'emulator';
+
+    const head = await getHead(db, project.id);
+    if (!head) throw new HttpError(409, 'The project has no design yet. Add resources first.');
+
+    const bundle = buildTerraformFiles(
+      {
+        nodes: head.doc.nodes as CloudNode[],
+        edges: head.doc.edges as CloudEdge[],
+        environments: mergeEnvironments(head.doc.environments),
+      },
+      target
+    );
+    const result = await writeTerraformOutput(target, project, bundle);
+    await recordEvent(db, project.id, actorOf(body), 'terraform.sync', {
+      target,
+      written: result.writtenFiles.length,
+      errors: result.errors.length,
+    });
+    sendJson(res, { ok: result.errors.length === 0, version: head.version, ...result, timestamp: new Date().toISOString() });
+  });
+
+  // Streaming Terraform runner, scoped to the project's working dir. Plain-text chunks,
+  // terminated by "__LC_EXIT__:<code>". A successful plan also emits one "__LC_PLAN__:<json>"
+  // line with its resource changes; applying a plan whose inputs changed since review emits
+  // "__LC_PLAN_STALE__" and stops. `destroy: true` with `plan` makes a destroy plan.
+  // One terraform run per project+env at a time: an advisory lock, and every run is recorded.
+  on('POST', '/api/projects/:id/terraform/run', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const project = await requireProject(db, params.id);
+
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    let body: any;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      res.write('Invalid JSON body\n');
+      res.end('\n__LC_EXIT__:1\n');
+      return;
+    }
+
+    const envId = parseEnvId(body.envId);
+    const port = parsePort(body.port);
+    const command = String(body.command || 'plan');
+    const region = /^[a-z]{2}(-[a-z]+)+-\d$/.test(String(body.region)) ? String(body.region) : 'us-east-1';
+    const actor = actorOf(body);
+    const finish = (code: number) => res.end(`\n__LC_EXIT__:${code}\n`);
+
+    if (!envId || !port || !TERRAFORM_COMMANDS.has(command)) {
+      res.write('Invalid envId, port or command\n');
+      return finish(1);
+    }
+
+    const envDir = path.join(project.working_dir, OUTPUT_DIRS.emulator, 'environments', envId);
+    if (!fs.existsSync(envDir)) {
+      res.write(`Environment directory not found at ${envDir}. Sync first.\n`);
+      return finish(1);
+    }
+
+    try {
+      await withAdvisoryLock(db, `${project.id}:tf:${envId}`, async () => {
+        const [run] = await db`
+          INSERT INTO runs (project_id, env, command, status, actor)
+          VALUES (${project.id}, ${envId}, ${command}, 'running', ${actor})
+          RETURNING id
+        `;
+        const runId = Number(run.id);
+        let log = '';
+        const tee = (chunk: string | Buffer) => {
+          res.write(chunk);
+          log = (log + String(chunk)).slice(-RUN_LOG_MAX_CHARS);
+        };
+        const finishRun = async (status: string, code: number, planJson: unknown = null) => {
+          await db`
+            UPDATE runs SET status = ${status}, exit_code = ${code}, log = ${log},
+              plan_json = ${planJson ? JSON.stringify(planJson) : null}::jsonb, finished_at = now()
+            WHERE id = ${runId}
+          `.catch(() => {});
+        };
+
+        const planPath = path.join(envDir, PLAN_FILE);
+        const planInputsPath = path.join(envDir, PLAN_INPUTS_FILE);
+        const discardPlan = () => {
+          fs.rmSync(planPath, { force: true });
+          fs.rmSync(planInputsPath, { force: true });
+        };
+        // Applying the saved plan runs exactly what was reviewed on the canvas
+        const applySavedPlan = command === 'apply' && body.usePlan === true && fs.existsSync(planPath);
+        if (command !== 'apply' || !applySavedPlan) discardPlan();
+
+        // The canvas can't see inside Lambda code folders; refuse a plan whose inputs changed since review
+        if (applySavedPlan) {
+          const reviewed = fs.existsSync(planInputsPath) ? fs.readFileSync(planInputsPath, 'utf-8').trim() : '';
+          if (reviewed !== planInputsHash(envDir)) {
+            discardPlan();
+            tee('The Terraform files or Lambda code changed since this plan was reviewed. Nothing was applied; plan again.\n');
+            res.write('\n__LC_PLAN_STALE__\n');
+            await finishRun('stale-plan', 1);
+            return finish(1);
+          }
+        }
+
+        const varFile = `-var-file=${envId}.tfvars`;
+        const steps: string[][] = [['init', '-no-color', '-input=false']];
+        if (command === 'validate') steps.push(['validate', '-no-color']);
+        if (command === 'plan') {
+          steps.push([
+            'plan',
+            ...(body.destroy === true ? ['-destroy'] : []),
+            varFile,
+            `-out=${PLAN_FILE}`,
+            '-no-color',
+            '-input=false',
+          ]);
+        }
+        if (command === 'apply') {
+          steps.push(
+            applySavedPlan
+              ? ['apply', '-no-color', '-input=false', PLAN_FILE]
+              : ['apply', varFile, '-auto-approve', '-no-color', '-input=false']
+          );
+        }
+        if (command === 'destroy') steps.push(['destroy', varFile, '-auto-approve', '-no-color', '-input=false']);
+
+        const awsEnv = getEmulatorAwsEnv(port, region);
+        let active: ReturnType<typeof spawn> | null = null;
+        let aborted = false;
+        res.on('close', () => {
+          aborted = true;
+          active?.kill('SIGINT');
+        });
+
+        let applyOutput = '';
+        for (const args of steps) {
+          if (aborted) {
+            await finishRun('aborted', 130);
+            return;
+          }
+          tee(`$ terraform ${args.join(' ')}\n`);
+          const code = await new Promise<number>((resolve) => {
+            const child = spawn('terraform', args, { cwd: envDir, env: awsEnv });
+            active = child;
+            const forward = (chunk: Buffer) => {
+              tee(chunk);
+              if (args[0] === 'apply') applyOutput += chunk.toString();
+            };
+            child.stdout.on('data', forward);
+            child.stderr.on('data', forward);
+            child.on('error', (err) => {
+              tee(`${err.message}\n`);
+              resolve(127);
+            });
+            child.on('close', (c) => resolve(c ?? 1));
+          });
+          active = null;
+          if (code !== 0) {
+            if (command === 'apply') {
+              discardPlan();
+              const quirks = securityGroupEgressQuirks(applyOutput);
+              for (const addr of quirks) {
+                const untainted = await runCommand('terraform', ['untaint', '-no-color', addr], { cwd: envDir, env: awsEnv });
+                tee(
+                  untainted.ok
+                    ? `\nNote: ${addr} exists, but an emulator bug (aws/aws-emulator#46) made Terraform mark it failed. LocalCloud marked it usable again. Apply again to create the rest.\n`
+                    : `\nCould not untaint ${addr}: ${untainted.stderr.trim()}\n`
+                );
+              }
+            }
+            await finishRun('failed', code);
+            return finish(code);
+          }
+        }
+
+        let planChanges: PlanResourceChange[] | null = null;
+        if (command === 'plan') {
+          fs.writeFileSync(planInputsPath, planInputsHash(envDir));
+          planChanges = await readPlanChanges(envDir, awsEnv);
+          if (planChanges) res.write(`\n__LC_PLAN__:${JSON.stringify(planChanges)}\n`);
+        }
+        if (command === 'apply') discardPlan();
+        await finishRun('succeeded', 0, planChanges);
+        finish(0);
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Internal error';
+      if (err instanceof BusyError) {
+        res.write(`Another terraform run for ${envId} is already active. Wait for it to finish and try again.\n`);
+        return finish(1);
+      }
+      if (!res.headersSent) {
+        res.removeHeader('Content-Type');
+        sendJson(res, { ok: false, error: message }, 500);
+      } else {
+        res.write(`${message}\n`);
+        finish(1);
+      }
+    }
+  });
+
+  // What exists in an environment, from its local Terraform state: resources and outputs.
+  // Read straight from terraform.tfstate, so it works without terraform or a running emulator.
+  on('GET', '/api/projects/:id/terraform/state', async (_req, res, url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const project = await requireProject(db, params.id);
+    const envId = parseEnvId(url.searchParams.get('envId'));
+    if (!envId) return sendJson(res, { ok: false, error: 'Invalid envId' }, 400);
+
+    const statePath = path.join(project.working_dir, OUTPUT_DIRS.emulator, 'environments', envId, 'terraform.tfstate');
+    if (!fs.existsSync(statePath)) return sendJson(res, { ok: true, exists: false, resources: [], outputs: {} });
+    try {
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+      const resources = (state.resources || [])
+        .filter((r: any) => r?.mode === 'managed' && Array.isArray(r.instances) && r.instances.length > 0)
+        .map((r: any) => ({ type: String(r.type), name: String(r.name) }));
+      const outputs = Object.fromEntries(
+        Object.entries<any>(state.outputs || {}).map(([name, out]) => [
+          name,
+          out?.sensitive ? '(sensitive)' : typeof out?.value === 'string' ? out.value : JSON.stringify(out?.value),
+        ])
+      );
+      sendJson(res, { ok: true, exists: true, resources, outputs });
+    } catch (err: any) {
+      sendJson(res, { ok: false, error: `Could not read ${envId} state: ${err?.message}` });
+    }
+  });
+
+  // One headless design mutation: load head, apply the op (canvas rules enforced), save as a new
+  // version. The MCP server's design tools and any programmatic client use exactly this path.
+  on('POST', '/api/projects/:id/ops', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const project = await requireProject(db, params.id);
+    const body = await readJsonBody(req);
+    const op = String(body.op || '');
+    if (!op) throw new HttpError(400, 'op is required');
+
+    // These ops can start a design from nothing; everything else needs an existing one
+    const SEED_OPS = new Set(['resource.add', 'template.apply', 'import.terraform']);
+    const head = await getHead(db, project.id);
+    if (!head && !SEED_OPS.has(op)) {
+      throw new HttpError(409, 'The project has no design yet. Start with template_apply, import_terraform or resource_add.');
+    }
+    const baseDoc: ProjectFile = head?.doc ?? {
+      version: '2.0.0',
+      environments: {} as ProjectFile['environments'],
+      nodes: [],
+      edges: [],
+    };
+
+    const outcome = applyDesignOp(op, baseDoc, (body.args && typeof body.args === 'object' ? body.args : {}) as Record<string, unknown>);
+    if (!outcome.ok) throw new HttpError(outcome.status ?? 400, outcome.error);
+
+    if (opMutates(op)) {
+      const actor = actorOf(body);
+      const saved = await saveDoc(db, project.id, outcome.doc, { baseVersion: head?.version ?? 0, actor, summary: op });
+      if (!saved.ok) throw new HttpError(409, 'The project changed while applying this operation; retry it');
+      await recordEvent(db, project.id, actor, `design.${op}`, body.args ?? {}).catch(() => {});
+      return sendJson(res, { ok: true, version: saved.version, result: outcome.result });
+    }
+    sendJson(res, { ok: true, version: head?.version ?? 0, result: outcome.result });
+  });
+
+  // The catalog as data: services with their field schemas, blueprint ids, emulator support.
+  // tfExpression functions are not serializable; output names are.
+  on('GET', '/api/catalog', async (_req, res) => {
+    sendJson(res, {
+      ok: true,
+      categories: AWS_CATEGORIES,
+      templates: ARCHITECTURE_TEMPLATES.map((t) => ({ id: t.id, name: t.name, subtitle: t.subtitle, description: t.description })),
+      services: AWS_SERVICES_CATALOG.map((svc) => ({
+        typeId: svc.typeId,
+        name: svc.name,
+        shortName: svc.shortName,
+        category: svc.category,
+        description: svc.description,
+        terraformResourceType: svc.terraformResourceType,
+        isContainer: svc.isContainer ?? false,
+        emulatorSupport: emulatorSupport(svc).level,
+        fields: svc.schema.map((f) => ({
+          key: f.key,
+          label: f.label,
+          type: f.type,
+          defaultValue: f.defaultValue,
+          description: f.description,
+          options: f.options?.map((o) => o.value),
+          group: f.group,
+          envConfigurable: f.envConfigurable ?? false,
+        })),
+        outputs: svc.outputs.map((o) => o.name),
+      })),
+    });
+  });
+
+  return function apiMiddleware(req: IncomingMessage, res: ServerResponse, next: () => void) {    const url = new URL(req.url || '', 'http://localhost');
+    if (!url.pathname.startsWith('/api/')) return next();
+    if (!isLocalRequest(req) || !isAuthorized(req)) return sendJson(res, { ok: false, error: 'Forbidden' }, 403);
+
+    const respond = (err: unknown) => {
+      if (err instanceof HttpError && !res.headersSent) return sendJson(res, { ok: false, error: err.message }, err.status);
+      if (!res.headersSent) sendJson(res, { ok: false, error: (err as any)?.message || 'Internal error' }, 500);
+      else res.end();
+    };
+
+    const exact = exactRoutes[url.pathname];
+    if (exact) return void Promise.resolve(exact(req, res, url)).catch(respond);
+
+    const parts = url.pathname.split('/').filter(Boolean);
+    for (const route of paramRoutes) {
+      if (route.method !== req.method || route.parts.length !== parts.length) continue;
+      const params: Record<string, string> = {};
+      let matched = true;
+      for (let i = 0; i < parts.length; i++) {
+        const pattern = route.parts[i];
+        if (pattern.startsWith(':')) params[pattern.slice(1)] = decodeURIComponent(parts[i]);
+        else if (pattern !== parts[i]) {
+          matched = false;
+          break;
+        }
+      }
+      if (!matched) continue;
+      return void Promise.resolve(route.handler(req, res, url, params)).catch(respond);
+    }
+    sendJson(res, { ok: false, error: 'Not found' }, 404);
   };
 }

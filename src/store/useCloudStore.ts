@@ -16,19 +16,10 @@ import type {
   EnvironmentProfile,
   ProvisioningState,
 } from '../types/cloud';
-import {
-  DEFAULT_ENVIRONMENTS,
-  SERVICE_BY_TYPE,
-  getDefaultConfigForService,
-} from '../data/awsCatalog';
+import { DEFAULT_ENVIRONMENTS } from '../data/awsCatalog';
 import { ARCHITECTURE_TEMPLATES } from '../data/templates';
-import {
-  compileTerraformForEnvironment,
-  resolveNodeConfigForEnv,
-  sanitizeIdentifier,
-  type CompileTarget,
-} from '../utils/terraformCompiler';
-import { AWS_EXPORT_USER_FILES } from '../utils/awsExport';
+import { ENV_ORDER, buildTerraformFiles, planFingerprint } from '../utils/terraformBundle';
+import { createServiceNode } from '../utils/nodeFactory';
 import { statusFromState } from '../utils/terraformState';
 import { checkConnection } from '../utils/connectionRules';
 import { parseTerraformHclToCanvas, type HclImportResult } from '../utils/hclImporter';
@@ -77,6 +68,16 @@ export interface ProjectFileStatus {
   error?: string;
 }
 
+/** The project row this tab is editing. Designs live in the backend's Postgres. */
+export interface ActiveProject {
+  id: string;
+  name: string;
+  working_dir: string;
+}
+
+const ACTIVE_PROJECT_KEY = 'localcloud-active-project';
+const LAST_PROJECT_KEY = 'localcloud-last-project';
+
 interface HistorySnapshot {
   nodes: CloudNode[];
   edges: CloudEdge[];
@@ -112,6 +113,11 @@ interface CloudStudioState {
   runningEnv: EnvironmentId | null;
   pendingPlan: PendingPlan | null;
   projectFile: ProjectFileStatus;
+  activeProject: ActiveProject | null;
+  /** Head version of the design; every save carries it so a second writer gets a 409, not a clobber. */
+  projectVersion: number;
+  /** Set when a save lost that race (another tab or an agent wrote first); reload to recover. */
+  projectConflict: boolean;
 
   // Actions
   /** Snapshot for undo. Calls sharing a coalesceKey within a short window collapse into one entry. */
@@ -186,6 +192,9 @@ interface CloudStudioState {
   applyReviewedPlan: () => Promise<void>;
   discardPlan: () => void;
   loadProjectFromDisk: () => Promise<void>;
+  /** Switch the tab to another project row; the page reloads onto it. */
+  openProject: (projectId: string) => void;
+  createProject: (name: string, workingDir: string) => Promise<{ ok: boolean; error?: string }>;
   /** Node status and outputs from each environment's Terraform state (all environments by default). */
   syncStatusFromState: (envIds?: EnvironmentId[]) => Promise<void>;
   appendTerminalLog: (msg: string) => void;
@@ -193,7 +202,6 @@ interface CloudStudioState {
 }
 
 const initialTemplate = ARCHITECTURE_TEMPLATES[0];
-const ENV_ORDER: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 const MAX_TERMINAL_LINES = 500;
 const HISTORY_COALESCE_MS = 1200;
 
@@ -202,76 +210,6 @@ let lastHistoryPush = { key: '', at: 0 };
 const TF_PROGRESS_LINE =
   /^(?:module\.[^\s]+\.)?([a-z0-9_]+)\.([A-Za-z0-9_-]+)(?:\[[^\]]*\])?: (Creating|Creation complete|Modifying|Modifications complete|Destroying|Destruction complete|Still creating|Still modifying)/;
 const TF_ERROR_RESOURCE = /with (?:module\.[^\s]+\.)?([a-z0-9_]+)\.([A-Za-z0-9_-]+)/;
-
-/** Everything that decides what `terraform plan` would do for one environment. */
-function planFingerprint(
-  state: Pick<CloudStudioState, 'nodes' | 'edges' | 'environments'>,
-  envId: EnvironmentId
-): string {
-  const compiled = compileTerraformForEnvironment(state.nodes, state.edges, state.environments[envId], state.environments);
-  const lambdaCode = state.nodes
-    .filter((n) => n.data.serviceType === 'aws_lambda_function' && n.data.envEnabled?.[envId] !== false)
-    .map((n) => `${n.id}:${n.data.sourceDir ?? ''}:${n.data.inlineCode || ''}`);
-  return [compiled.mainTf, compiled.providerTf, compiled.variablesTf, compiled.tfvars, compiled.outputsTf, ...lambdaCode].join('\u0000');
-}
-
-interface LambdaArtifact {
-  envId: EnvironmentId;
-  resourceName: string;
-  runtime: string;
-  handler: string;
-  code?: string;
-  sourceDir?: string;
-}
-
-/** Every file of one compile target, laid out as environments/<env>/…, plus the Lambda zips to build. */
-function buildTerraformFiles(
-  state: Pick<CloudStudioState, 'nodes' | 'edges' | 'environments'>,
-  target: CompileTarget
-) {
-  const { nodes, edges, environments } = state;
-  const files: Record<string, string> = {};
-  const filesIfMissing: Record<string, string> = {};
-  const lambdaArtifacts: LambdaArtifact[] = [];
-
-  for (const envId of ENV_ORDER) {
-    const compiled = compileTerraformForEnvironment(nodes, edges, environments[envId], environments, target);
-    const dir = `environments/${envId}`;
-    files[`${dir}/main.tf`] = compiled.mainTf;
-    files[`${dir}/provider.tf`] = compiled.providerTf;
-    files[`${dir}/variables.tf`] = compiled.variablesTf;
-    files[`${dir}/${envId}.tfvars`] = compiled.tfvars;
-    files[`${dir}/outputs.tf`] = compiled.outputsTf;
-
-    if (target === 'emulator') {
-      files[`${dir}/run-emulator-${envId}.sh`] = compiled.emulatorScriptSh;
-      if (envId === 'dev') {
-        files['Dockerfile.emulator'] = compiled.dockerfile;
-        files['docker-compose.emulator.yml'] = compiled.dockerComposeYml;
-      }
-    } else {
-      files[`${dir}/backend.tf`] = compiled.backendTf;
-      // Filled in by the user once; later exports keep their values
-      for (const name of AWS_EXPORT_USER_FILES) filesIfMissing[`${dir}/${name}`] = compiled.backendConfig;
-    }
-
-    for (const n of nodes) {
-      if (n.data.serviceType === 'aws_lambda_function' && n.data.envEnabled?.[envId] !== false) {
-        const cfg = resolveNodeConfigForEnv(n, envId);
-        lambdaArtifacts.push({
-          envId,
-          resourceName: sanitizeIdentifier(n.data.resourceName || n.data.label),
-          runtime: String(cfg.runtime || 'nodejs20.x'),
-          handler: String(cfg.handler || 'index.handler'),
-          code: n.data.inlineCode,
-          sourceDir: n.data.sourceDir,
-        });
-      }
-    }
-  }
-
-  return { files, filesIfMissing, lambdaArtifacts };
-}
 
 function withProvisioningState(
   nodes: CloudNode[],
@@ -313,24 +251,40 @@ const PROJECT_SAVE_DEBOUNCE_MS = 800;
 async function saveProjectToDisk(): Promise<void> {
   if (!projectDisk.ready) return;
   const state = useCloudStore.getState();
+  const { activeProject, projectVersion, projectConflict, projectFile } = state;
+  // No project (static preview) or a lost 409 race: nothing left to save until reload
+  if (!activeProject || projectConflict) return;
   const project = toProjectFile(state);
   const serialized = JSON.stringify(project);
   if (serialized === projectDisk.lastSaved) return;
 
-  const file = state.projectFile.file;
-  useCloudStore.setState({ projectFile: { state: 'saving', file } });
+  useCloudStore.setState({ projectFile: { state: 'saving', file: projectFile.file } });
   try {
-    const res = await fetch('/api/project', {
+    const res = await fetch(`/api/projects/${activeProject.id}/doc`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project }),
+      body: JSON.stringify({ doc: project, baseVersion: projectVersion }),
     });
     const data = await res.json();
+    if (data.conflict || res.status === 409) {
+      projectDisk.ready = false;
+      useCloudStore.setState({
+        projectConflict: true,
+        projectFile: {
+          state: 'error',
+          file: projectFile.file,
+          error: 'The project changed elsewhere (another tab or an agent)',
+        },
+      });
+      return;
+    }
     if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
     projectDisk.lastSaved = serialized;
-    useCloudStore.setState({ projectFile: { state: 'saved', file } });
+    useCloudStore.setState({ projectVersion: data.version, projectFile: { state: 'saved', file: projectFile.file } });
   } catch (err: any) {
-    useCloudStore.setState({ projectFile: { state: 'error', file, error: err?.message || 'Save failed' } });
+    useCloudStore.setState({
+      projectFile: { state: 'error', file: projectFile.file, error: err?.message || 'Save failed' },
+    });
   }
 }
 
@@ -370,6 +324,9 @@ export const useCloudStore = create<CloudStudioState>()(
       runningEnv: null,
       pendingPlan: null,
       projectFile: { state: 'unknown' },
+      activeProject: null,
+      projectVersion: 0,
+      projectConflict: false,
 
       pushHistory: (coalesceKey) => {
         const now = Date.now();
@@ -508,62 +465,12 @@ export const useCloudStore = create<CloudStudioState>()(
       setExportModalOpen: (open) => set({ isExportModalOpen: open }),
 
       addServiceNode: (serviceType, position) => {
-        const svc = SERVICE_BY_TYPE[serviceType];
-        if (!svc) return;
+        const created = createServiceNode(serviceType, get().nodes, position);
+        if (!created) return;
         get().pushHistory();
-
-        const existingOfType = get().nodes.filter((n) => n.data.serviceType === serviceType).length;
-        const indexSuffix = existingOfType + 1;
-        const cleanShort = svc.shortName
-          .toLowerCase()
-          .replace(/[^a-z0-9]/g, '_')
-          .replace(/_+/g, '_');
-
-        const newId = `node-${cleanShort}-${Date.now().toString(36)}`;
-        const defaultPos = position || {
-          x: 240 + ((get().nodes.length * 45) % 450),
-          y: 120 + ((get().nodes.length * 40) % 340),
-        };
-
-        const defaultInlineCode =
-          serviceType === 'aws_lambda_function'
-            ? `export const handler = async (event) => {\n  console.log("Event received on AWS Emulator:", JSON.stringify(event));\n  return {\n    statusCode: 200,\n    headers: { "content-type": "application/json" },\n    body: JSON.stringify({\n      ok: true,\n      service: "${cleanShort}_${indexSuffix}",\n      environment: process.env.ENVIRONMENT || "dev",\n      timestamp: new Date().toISOString(),\n    }),\n  };\n};\n`
-            : undefined;
-
-        const newNode: CloudNode = {
-          id: newId,
-          type: svc.isContainer ? 'awsContainer' : 'awsNode',
-          position: defaultPos,
-          ...(svc.isContainer
-            ? { width: svc.defaultWidth ?? 420, height: svc.defaultHeight ?? 280 }
-            : {}),
-          data: {
-            label: `${svc.shortName} ${indexSuffix}`,
-            resourceName: `${cleanShort}_${indexSuffix}`,
-            serviceType,
-            baseConfig: getDefaultConfigForService(serviceType),
-            envOverrides: {},
-            envEnabled: {
-              dev: true,
-              testing: true,
-              staging: true,
-              prod: true,
-            },
-            tags: {
-              Service: svc.serviceCode,
-            },
-            inlineCode: defaultInlineCode,
-          },
-        };
-
-        // Dropping onto a VPC / Subnet places the new resource inside it
-        let nodes = normalizeNodes([...get().nodes, newNode]);
-        const container = position ? findDropContainer(newNode, nodes) : undefined;
-        if (container) nodes = reparentNode(nodes, newId, container.id);
-
         set({
-          nodes,
-          selectedNodeId: newId,
+          nodes: created.nodes,
+          selectedNodeId: created.node.id,
           selectedEdgeId: null,
           rightTab: 'inspector',
         });
@@ -864,36 +771,39 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       syncTerraformToDisk: async () => {
-        const { appendTerminalLog } = get();
-        const { files, lambdaArtifacts } = buildTerraformFiles(get(), 'emulator');
+        const { appendTerminalLog, activeProject } = get();
+        if (!activeProject) return { ok: false };
 
         try {
-          const res = await fetch('/api/terraform/export', {
+          // The backend compiles the head design itself; the browser no longer builds Terraform
+          const res = await fetch(`/api/projects/${activeProject.id}/terraform/sync`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target: 'emulator', files, lambdaArtifacts }),
+            body: JSON.stringify({ target: 'emulator' }),
           });
           const data = await res.json();
-          if (data.ok) {
-            appendTerminalLog(
-              `Synced ${data.writtenFiles?.length || 0} Terraform & Lambda zip artifacts to ./terraform-out`
-            );
-            for (const error of data.errors || []) appendTerminalLog(`Error: ${error}`);
-            return { ok: (data.errors || []).length === 0, writtenFiles: data.writtenFiles };
+          if (!data.ok && data.error) {
+            appendTerminalLog(`Error: ${data.error}`);
+            return { ok: false };
           }
-          return { ok: false };
+          appendTerminalLog(
+            `Synced ${data.writtenFiles?.length || 0} Terraform & Lambda zip artifacts to ./terraform-out`
+          );
+          for (const error of data.errors || []) appendTerminalLog(`Error: ${error}`);
+          return { ok: (data.errors || []).length === 0 && !!data.ok, writtenFiles: data.writtenFiles };
         } catch {
           return { ok: false };
         }
       },
 
       exportForAws: async () => {
-        const { files, filesIfMissing, lambdaArtifacts } = buildTerraformFiles(get(), 'aws');
+        const { activeProject } = get();
+        if (!activeProject) return { ok: false, error: 'No active project' };
         try {
-          const res = await fetch('/api/terraform/export', {
+          const res = await fetch(`/api/projects/${activeProject.id}/terraform/sync`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target: 'aws', files, filesIfMissing, lambdaArtifacts }),
+            body: JSON.stringify({ target: 'aws' }),
           });
           const data = await res.json();
           if (!data.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
@@ -923,6 +833,7 @@ export const useCloudStore = create<CloudStudioState>()(
               action,
               envId,
               port: profile.emulatorPort,
+              projectId: get().activeProject?.id,
             }),
           });
           const data = await res.json();
@@ -1017,7 +928,7 @@ export const useCloudStore = create<CloudStudioState>()(
 
         const synced = await syncTerraformToDisk();
         if (!synced.ok) {
-          appendTerminalLog(`Error: ${tag} ./terraform-out could not be prepared (see above, or is the local server running?). Nothing was run.`);
+          appendTerminalLog(`Error: ${tag} ./terraform-out could not be prepared (see above, or is the local server + Postgres running?). Nothing was run.`);
           set((state) => ({
             nodes: withProvisioningState(state.nodes, envId, (n) => previousStates[n.id] ?? 'unapplied'),
             isRunningCommand: false,
@@ -1064,7 +975,9 @@ export const useCloudStore = create<CloudStudioState>()(
 
         let exitCode = 1;
         try {
-          const res = await fetch('/api/terraform/run', {
+          const projectId = get().activeProject?.id;
+          if (!projectId) throw new Error('No active project');
+          const res = await fetch(`/api/projects/${projectId}/terraform/run`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1143,10 +1056,12 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       syncStatusFromState: async (envIds = ENV_ORDER) => {
+        const projectId = get().activeProject?.id;
+        if (!projectId) return;
         await Promise.all(
           envIds.map(async (envId) => {
             try {
-              const res = await fetch(`/api/terraform/state?envId=${envId}`);
+              const res = await fetch(`/api/projects/${projectId}/terraform/state?envId=${envId}`);
               const data = await res.json();
               if (!data.ok) return;
               set((state) => {
@@ -1185,34 +1100,76 @@ export const useCloudStore = create<CloudStudioState>()(
         // StrictMode mounts twice in development; both callers share one load
         projectDisk.loading ??= (async () => {
         try {
-          const res = await fetch('/api/project');
+          const res = await fetch('/api/projects');
           const data = await res.json();
           if (!data.ok) {
-            // Never overwrite a file we could not read
-            set({ projectFile: { state: data.exists ? 'error' : 'unavailable', file: data.file, error: data.error } });
-            if (data.exists) get().appendTerminalLog(`Error: ${data.error}. Fix or remove the file, then reload.`);
+            set({ projectFile: { state: 'error', error: data.error || `HTTP ${res.status}` } });
+            get().appendTerminalLog(`Error: ${data.error || 'Project list unavailable'}. Is Postgres running (docker compose up -d postgres)?`);
             return;
           }
 
-          if (data.exists && Array.isArray(data.project?.nodes) && Array.isArray(data.project?.edges)) {
-            const project = data.project;
-            const nodes = withRuntimeStateFrom(normalizeNodes(project.nodes), get().nodes);
+          const projects = (data.projects || []) as ActiveProject[];
+          if (projects.length === 0) {
+            set({ projectFile: { state: 'unavailable' } });
+            return;
+          }
+          // The tab sticks to the project it had; new tabs get the folder the server runs in
+          const storedId = localStorage.getItem(ACTIVE_PROJECT_KEY);
+          const project = projects.find((p) => p.id === storedId) || projects.find((p) => p.id === data.defaultProjectId) || projects[0];
+          localStorage.setItem(ACTIVE_PROJECT_KEY, project.id);
+          const switched = localStorage.getItem(LAST_PROJECT_KEY) !== project.id;
+          localStorage.setItem(LAST_PROJECT_KEY, project.id);
+
+          const detailRes = await fetch(`/api/projects/${project.id}`);
+          const detail = await detailRes.json();
+          if (!detail.ok) {
+            set({ projectFile: { state: 'error', file: detail.file, error: detail.error } });
+            get().appendTerminalLog(`Error: ${detail.error || 'Project could not be loaded'}`);
+            return;
+          }
+
+          const activeProject: ActiveProject = {
+            id: detail.project.id,
+            name: detail.project.name,
+            working_dir: detail.project.working_dir,
+          };
+
+          if (detail.exists && Array.isArray(detail.doc?.nodes) && Array.isArray(detail.doc?.edges)) {
+            const doc = detail.doc;
+            const nodes = withRuntimeStateFrom(normalizeNodes(doc.nodes), get().nodes);
             set((state) => ({
               nodes,
-              edges: project.edges,
-              environments: withCurrentEnvironmentColors(project.environments) || state.environments,
+              edges: doc.edges,
+              environments: withCurrentEnvironmentColors(doc.environments) || state.environments,
               selectedNodeId: nodes.some((n) => n.id === state.selectedNodeId) ? state.selectedNodeId : null,
               selectedEdgeId: null,
               past: [],
               future: [],
             }));
+          } else if (switched) {
+            // Switching to an empty project must not carry the previous canvas over
+            set({
+              nodes: normalizeNodes(initialTemplate.nodes),
+              edges: initialTemplate.edges,
+              selectedNodeId: null,
+              selectedEdgeId: null,
+              past: [],
+              future: [],
+            });
           }
 
           projectDisk.ready = true;
-          projectDisk.lastSaved = data.exists ? JSON.stringify(toProjectFile(get())) : '';
-          set({ projectFile: { state: 'saved', file: data.file } });
+          projectDisk.lastSaved = detail.exists ? JSON.stringify(toProjectFile(get())) : '';
+          set({
+            activeProject,
+            projectVersion: detail.version ?? 0,
+            projectConflict: false,
+            projectFile: { state: 'saved', file: detail.file },
+          });
           get().appendTerminalLog(
-            data.exists ? `Loaded project from ./${data.file}` : `Saving project to ./${data.file}`
+            detail.exists
+              ? `Loaded project "${activeProject.name}" (version ${detail.version})`
+              : `Project "${activeProject.name}" ready — saving to ./${detail.file}`
           );
           // First run in this directory, or the file needs normalising: write it now
           await saveProjectToDisk();
@@ -1222,6 +1179,28 @@ export const useCloudStore = create<CloudStudioState>()(
         }
         })();
         return projectDisk.loading;
+      },
+
+      openProject: (projectId) => {
+        localStorage.setItem(ACTIVE_PROJECT_KEY, projectId);
+        window.location.reload();
+      },
+
+      createProject: async (name, workingDir) => {
+        try {
+          const res = await fetch('/api/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, workingDir }),
+          });
+          const data = await res.json();
+          if (!data.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+          localStorage.setItem(ACTIVE_PROJECT_KEY, data.project.id);
+          window.location.reload();
+          return { ok: true };
+        } catch (err: any) {
+          return { ok: false, error: err?.message || 'The local API is not reachable' };
+        }
       },
 
       appendTerminalLog: (msg) =>

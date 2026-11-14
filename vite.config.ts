@@ -6,10 +6,20 @@ export default defineConfig({
   plugins: [
     react(),
     {
-      // The local API (emulator control, Terraform runner, project file, data explorer) lives in server/api.ts
+      // The local API (projects, Terraform runner, emulator control, data explorer) lives in server/api.ts.
+      // Dev needs Postgres like production: `docker compose up -d postgres` then DATABASE_URL=... npm run dev
       name: 'local-cloud-emulator-api',
       configureServer(server) {
-        server.middlewares.use(createApiMiddleware());
+        if (!process.env.DATABASE_URL) {
+          console.warn(
+            '[localcloud] DATABASE_URL is not set — project routes will answer 503.\n' +
+              '[localcloud]   docker compose up -d postgres\n' +
+              '[localcloud]   DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5434/localcloud npm run dev'
+          );
+        }
+        server.middlewares.use(
+          createApiMiddleware({ databaseUrl: process.env.DATABASE_URL, defaultProjectDir: process.cwd() })
+        );
       },
     },
   ],

@@ -17,3 +17,6 @@
 # Playwright
 /test-results/
 /playwright-report/
+
+# docker compose app working dirs
+/projects/

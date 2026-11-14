@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-server
+test-results
+playwright-report
+tests/golden
+projects
+.git
+.zcode
+.env
+.env.*
+*.log
+*.tsbuildinfo
+.DS_Store
+terraform-out
+terraform-aws

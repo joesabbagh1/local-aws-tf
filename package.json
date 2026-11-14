@@ -42,13 +42,15 @@
     "validate:golden": "node scripts/validate-golden.mjs",
     "test:emulator": "esbuild scripts/apply-blueprints.ts --bundle --platform=node --format=cjs --target=node18 --outfile=node_modules/.cache/localcloud/apply-blueprints.cjs --log-level=warning && node node_modules/.cache/localcloud/apply-blueprints.cjs",
     "test:e2e": "playwright test",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "mcp:smoke": "esbuild scripts/mcp-smoke.ts --bundle --platform=node --format=cjs --target=node22 --outfile=node_modules/.cache/localcloud/mcp-smoke.cjs --log-level=warning && node node_modules/.cache/localcloud/mcp-smoke.cjs"
   },
   "devDependencies": {
     "@aws-sdk/client-dynamodb": "^3.1169.0",
     "@aws-sdk/client-lambda": "^3.1169.0",
     "@aws-sdk/client-s3": "^3.1169.0",
     "@aws-sdk/client-sqs": "^3.1169.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@playwright/test": "^1.57.0",
     "@smithy/node-http-handler": "^4.14.2",
     "@types/node": "^22.9.0",
@@ -61,6 +63,7 @@
     "esbuild": "^0.21.5",
     "lucide-react": "^0.460.0",
     "postcss": "^8.4.49",
+    "postgres": "^4.1.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tailwind-merge": "^2.5.4",
