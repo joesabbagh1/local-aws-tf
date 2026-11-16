@@ -869,7 +869,7 @@ resource "aws_elasticache_cluster" "elasticache_cluster" {
     Name = "${local.name_prefix}-elasticache_cluster"
   })
 
-  # Emulator only: it serves the cache on a port of its own choosing. The AWS export keeps the designed port.
+  # Emulator only: it serves the cache on a port of its own choosing (https://github.com/aws/aws-emulator/issues/471). The AWS export keeps the designed port.
   lifecycle {
     ignore_changes = [port]
   }

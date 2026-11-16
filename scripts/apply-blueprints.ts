@@ -216,6 +216,7 @@ const UPSTREAM_ISSUES: Record<string, number> = {
   aws_kinesis_stream: 327,
   aws_instance: 422,
   aws_elasticache_replication_group: 355,
+  aws_elasticache_cluster: 471,
 };
 
 const SECURITY_GROUP_QUIRK_NOTE =

@@ -271,7 +271,7 @@ resource "aws_elasticache_replication_group" "session_redis_cache" {
     Name = "${local.name_prefix}-session_redis_cache"
   })
 
-  # Emulator only: it serves the cache on a port of its own choosing. The AWS export keeps the designed port.
+  # Emulator only: it serves the cache on a port of its own choosing (https://github.com/aws/aws-emulator/issues/471). The AWS export keeps the designed port.
   lifecycle {
     ignore_changes = [port]
   }

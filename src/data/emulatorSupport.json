@@ -366,7 +366,8 @@
       "failed": 0,
       "errors": [
         "The emulator serves the cache on a port of its own choosing, so the emulator run ignores port changes instead of replacing the cluster. The AWS export keeps the designed port."
-      ]
+      ],
+      "upstreamIssue": 471
     },
     "aws_elasticache_subnet_group": {
       "status": "verified",

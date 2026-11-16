@@ -21,6 +21,7 @@ export const EMULATOR_ADJUSTMENTS: Record<string, { issue?: number; note: string
     note: "The emulator can't delete Redis replication groups, so destroy removes them from Terraform state instead (restarting the emulator clears them). It also picks the port itself, so the emulator run ignores port changes. The AWS export is unchanged.",
   },
   aws_elasticache_cluster: {
+    issue: 471,
     note: 'The emulator serves the cache on a port of its own choosing, so the emulator run ignores port changes instead of replacing the cluster. The AWS export keeps the designed port.',
   },
 };

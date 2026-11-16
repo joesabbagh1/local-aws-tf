@@ -1583,7 +1583,7 @@ ${
       // every plan after an apply would replace the cache (port forces replacement)
       const portDrift = isAws
         ? ''
-        : `\n\n  # Emulator only: it serves the cache on a port of its own choosing. The AWS export keeps the designed port.\n  lifecycle {\n    ignore_changes = [port]\n  }`;
+        : `\n\n  # Emulator only: it serves the cache on a port of its own choosing (https://github.com/aws/aws-emulator/issues/471). The AWS export keeps the designed port.\n  lifecycle {\n    ignore_changes = [port]\n  }`;
       const cachePlacement = hasSubnets
         ? `\n  subnet_group_name    = aws_elasticache_subnet_group.${resName}_subnets.name\n  security_group_ids   = ${sgIdsArray}`
         : effectiveSgs.length > 0
