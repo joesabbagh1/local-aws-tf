@@ -428,6 +428,20 @@ export async function runMcpServer(argv: string[]): Promise<void> {
     inputSchema: { env: envField, projectId },
   }, (args: Record<string, any>) => controlEmulator('stop', args));
 
+  register('lambda_watch', {
+    description:
+      "Lambda watch mode for one environment. enabled=true: a function whose code changes (its code folder or inline code) is pushed to that environment's emulator a second later, without a plan; runtime, handler and other settings still need terraform_run apply. enabled=false stops it. Leave out enabled to list what is watched and the latest updates.",
+    inputSchema: { env: envField.optional(), enabled: z.boolean().optional(), projectId },
+  }, async (args: Record<string, any>) => {
+    const id = await api.resolveProject(args.projectId);
+    if (typeof args.enabled !== 'boolean') return api.json(`/api/projects/${id}/lambda-watch`);
+    if (!args.env) throw new ApiError('env is required to turn watching on or off', 400);
+    return api.json(`/api/projects/${id}/lambda-watch`, {
+      method: 'POST',
+      body: JSON.stringify({ envId: args.env, enabled: args.enabled, actor: ACTOR }),
+    });
+  });
+
   register('terraform_run', {
     description:
       'Run terraform (init/validate/plan/apply/destroy) for one environment against its emulator. Returns the exit code, a log tail and — for plan — the per-resource changes. A plan is saved; apply it with apply_plan.',

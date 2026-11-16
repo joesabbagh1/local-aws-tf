@@ -7,7 +7,7 @@ import { CloudWatchLogsClient, DescribeLogGroupsCommand, FilterLogEventsCommand 
 import { DynamoDBClient, GetItemCommand, ListTablesCommand, PutItemCommand, ScanCommand } from '@aws-sdk/client-dynamodb';
 import { EventBridgeClient, ListEventBusesCommand, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { GetRecordsCommand, GetShardIteratorCommand, KinesisClient, ListShardsCommand, ListStreamsCommand, PutRecordCommand } from '@aws-sdk/client-kinesis';
-import { InvokeCommand, LambdaClient, ListFunctionsCommand } from '@aws-sdk/client-lambda';
+import { InvokeCommand, LambdaClient, ListFunctionsCommand, UpdateFunctionCodeCommand } from '@aws-sdk/client-lambda';
 import { GetObjectCommand, ListBucketsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { DescribeExecutionCommand, ListExecutionsCommand, ListStateMachinesCommand, SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { ListTopicsCommand, PublishCommand, SNSClient } from '@aws-sdk/client-sns';
@@ -45,6 +45,11 @@ function getEmulatorClientConfig(port: number, region: string) {
       httpsAgent: new https.Agent({ ca: fs.readFileSync(path.join(baseDir, 'ca.pem')) }),
     }),
   };
+}
+
+/** Replaces a deployed function's code (Lambda watch mode). */
+export async function updateLambdaCode(port: number, region: string, functionName: string, zip: Buffer): Promise<void> {
+  await new LambdaClient(getEmulatorClientConfig(port, region)).send(new UpdateFunctionCodeCommand({ FunctionName: functionName, ZipFile: zip }));
 }
 
 const MAX_PAYLOAD_CHARS = 64 * 1024;

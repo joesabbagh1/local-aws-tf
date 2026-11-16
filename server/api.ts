@@ -16,7 +16,8 @@ import type { ProjectFile } from '../src/utils/projectFile';
 import type { Scenario } from '../src/utils/scenarios';
 import { parseScenario } from '../src/utils/scenarios';
 import { applyDesignOp, opMutates } from './services/designOps';
-import { emulatorDataDir, resolveLiveTarget, runExplorerOperation } from './services/explorer';
+import { emulatorDataDir, resolveLiveTarget, runExplorerOperation, updateLambdaCode } from './services/explorer';
+import { createLambdaWatcher } from './services/lambdaWatch';
 import { liveResourceName } from '../src/utils/terraformNames';
 import { runScenario, scenarioRunLog } from './services/scenarioRunner';
 import { securityGroupEgressQuirks } from './services/emulatorQuirks';
@@ -451,6 +452,36 @@ const RUN_LOG_MAX_CHARS = 512 * 1024;
 export function createApiMiddleware(options: { databaseUrl?: string; defaultProjectDir?: string; projectDir?: string } = {}) {
   const sql = options.databaseUrl ? createSql(options.databaseUrl) : null;
   const dbReady = sql ? new DbReady(sql) : null;
+
+  // Lambda watch mode: one watcher per server, for every project and environment that turns it on
+  const lambdaWatcher = createLambdaWatcher({
+    loadDesign: async (projectId) => {
+      if (!sql) return null;
+      const project = await getProject(sql, projectId);
+      const head = project ? await getHead(sql, projectId) : null;
+      return project && head ? { nodes: head.doc.nodes as CloudNode[], workingDir: project.working_dir } : null;
+    },
+    buildArtifact: (envDir, projectDir, art) => buildLambdaArtifact(envDir, projectDir, art),
+    updateCode: updateLambdaCode,
+    withEnvLock: async (projectId, envId, fn) => {
+      try {
+        await withAdvisoryLock(sql!, `${projectId}:tf:${envId}`, fn);
+        return true;
+      } catch (err) {
+        if (err instanceof BusyError) return false;
+        throw err;
+      }
+    },
+    onUpdate: (projectId, envId, update) => {
+      if (!sql) return;
+      void recordEvent(sql, projectId, 'watch', 'lambda.update', {
+        envId,
+        function: update.functionName,
+        ok: update.ok,
+        ...(update.error ? { error: update.error } : {}),
+      }).catch(() => {});
+    },
+  });
   const defaultProjectDir = options.defaultProjectDir
     ? path.resolve(options.defaultProjectDir)
     : path.resolve(options.projectDir || process.cwd());
@@ -722,6 +753,7 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
     const body = await readJsonBody(req).catch(() => ({}));
     const deleted = await deleteProject(db, params.id);
     if (!deleted) throw new HttpError(404, 'Project not found');
+    lambdaWatcher.stop(params.id);
     await recordEvent(db, null, actorOf(body), 'project.delete', { projectId: params.id });
     sendJson(res, { ok: true });
   });
@@ -1077,6 +1109,33 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
   });
 
   // The audit trail: who did what (design operations, syncs, emulator control, restores, scenario runs).
+  // Lambda watch mode per environment: GET lists what is watched and the latest updates
+  on('GET', '/api/projects/:id/lambda-watch', async (_req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    await requireProject(db, params.id);
+    sendJson(res, { ok: true, watches: lambdaWatcher.status(params.id) });
+  });
+
+  // { envId, enabled }: pushes changed Lambda code to that environment's emulator until turned off
+  on('POST', '/api/projects/:id/lambda-watch', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const project = await requireProject(db, params.id);
+    const body = await readJsonBody(req);
+    const head = await getHead(db, project.id);
+    const environments = mergeEnvironments(head?.doc.environments);
+    const envId = parseEnvId(body.envId);
+    const env = envId ? environments[envId] : undefined;
+    if (!envId || !env) throw new HttpError(400, `Unknown environment ${body.envId}. This project has: ${Object.keys(environments).join(', ')}`);
+    if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be true or false');
+
+    if (body.enabled) lambdaWatcher.start(project.id, envId, env.emulatorPort, env.region);
+    else lambdaWatcher.stop(project.id, envId);
+    await recordEvent(db, project.id, actorOf(body), body.enabled ? 'lambda.watch.start' : 'lambda.watch.stop', { envId }).catch(() => {});
+    sendJson(res, { ok: true, watches: lambdaWatcher.status(project.id) });
+  });
+
   on('GET', '/api/projects/:id/events', async (_req, res, url, params) => {
     const db = requireDb();
     await dbReady!.once();

@@ -13,6 +13,7 @@ import { emulatorSupport } from '../utils/emulatorSupport';
 import { envIdsOf, envLabel, isProductionEnv } from '../utils/environments';
 import type { SchemaField } from '../types/cloud';
 import { RunnerConsole } from './RunnerConsole';
+import { LambdaWatchSection } from './LambdaWatchSection';
 import { ResourceExplorerPanel } from './ResourceExplorerPanel';
 import { ArchitectureAuditPanel } from './ArchitectureAuditPanel';
 import type { RightDrawerTab } from '../store/useCloudStore';
@@ -1188,6 +1189,8 @@ function AwsEmulatorCommandCenter() {
       <Section>
         <RunnerConsole />
       </Section>
+
+      <LambdaWatchSection />
 
       {/* Health of every environment's emulator port */}
       <Section

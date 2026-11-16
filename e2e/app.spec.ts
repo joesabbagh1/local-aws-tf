@@ -194,6 +194,16 @@ test('shows how each service fared on the emulator', async ({ page }) => {
   await expect(inspector(page)).toContainText('Works on the emulator; LocalCloud applies twice');
 });
 
+test('watches Lambda code on the emulator from the Run tab', async ({ page }) => {
+  await tab(page, 'Run');
+  const section = inspector(page).locator('section', { has: page.getByRole('heading', { name: 'Lambda code' }) });
+  await expect(section).toContainText('without a plan');
+  await section.getByRole('switch').click();
+  await expect(section).toContainText(/Watching \d+ functions? since .+\. Nothing changed yet\./);
+  await section.getByRole('switch').click();
+  await expect(section).not.toContainText('Watching');
+});
+
 test('keeps deprecated services out of the catalog', async ({ page }) => {
   const catalog = page.locator('aside').first();
   await catalog.getByPlaceholder(/Search \d+ services/).fill('bedrock');

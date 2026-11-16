@@ -39,6 +39,7 @@ DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5434/localcloud npm run 
 - **Canvas**: drag services from the catalog, wire them together, and configure every field in the inspector. Drop resources into **VPC** and **Subnet** containers to place them in that network. The compiler fills in `vpc_id` / `subnet_ids` from the nesting.
 - **Environments**: `dev`, `testing`, `staging` and `prod` to start with, all on one canvas. Add your own in the **Envs** tab (`qa`, `perf`, `prod-eu`…), either blank or as a copy of another environment's region, usage and overrides. Each gets its own emulator port, Terraform folder and state. Remove the ones you don't use. Any field can be overridden per environment, and any resource can be switched off for one environment. Mark an environment as production to get the stricter audit checks (`prod` is production by default).
 - **Lambda code**: inline (one file, no dependencies) or a **folder** in the project, zipped as-is with its `node_modules` or vendored packages. Build or install first; the handler is a path inside the folder.
+- **Lambda watch mode**: switch on **Watch** under **Lambda code** in the Run tab, or use MCP's `lambda_watch`. While it's on, a function whose code changes is pushed to that environment's emulator about a second later, without a plan. That covers a file in its code folder and an edit to its inline code. A new runtime, handler or other setting still needs Apply. Updates wait while Terraform runs for that environment, and the next plan shows the function as changed until you apply.
 - **Extra HCL**: every resource has an **Extra HCL** field for arguments the form doesn't cover. It is written inside the resource block as typed and can be overridden per environment like any other field.
 - **Terraform**: **Sync** writes `terraform-out/environments/<env>/` (main, provider, variables, tfvars, outputs) and zips Lambda handler code into `artifacts/`. `terraform-out/` is generated and git-ignored.
 - **Run**: start or stop an emulator container per environment (ports 9297–9300), then run `init / validate / plan / apply / destroy` with live output. Everything the app runs goes to the local emulator.
@@ -98,7 +99,7 @@ Agents design, deploy and test environments through the same backend, with the s
 }
 ```
 
-`--token` / `LOCALCLOUD_TOKEN` when one is set. Against the compose stack, point `--url http://127.0.0.1:5173` and use container paths (`--project /projects/infra`). The 38 tools, grouped:
+`--token` / `LOCALCLOUD_TOKEN` when one is set. Against the compose stack, point `--url http://127.0.0.1:5173` and use container paths (`--project /projects/infra`). The 39 tools, grouped:
 
 | Group | Tools |
 | --- | --- |
@@ -106,7 +107,7 @@ Agents design, deploy and test environments through the same backend, with the s
 | History | `versions_list` `version_get` `version_restore` `project_diff` `runs_list` `run_get` `events_list` |
 | Design | `resource_add` `resource_configure` `resource_move` `resource_remove` `connection_create` `connection_remove` `env_override` `env_enable` `lambda_code_set` `extra_hcl_set` `template_apply` `import_terraform` |
 | Environments | `environment_add` `environment_update` `environment_remove` |
-| Run | `sync` `emulator_status` `emulator_start` `emulator_stop` `terraform_run` `apply_plan` `state_get` |
+| Run | `sync` `emulator_status` `emulator_start` `emulator_stop` `terraform_run` `apply_plan` `state_get` `lambda_watch` |
 | Data | `explore` (every Data tab operation; name the resource by canvas id) |
 | Scenarios | `scenarios_list` `scenario_save` `scenario_remove` `scenario_run` |
 
