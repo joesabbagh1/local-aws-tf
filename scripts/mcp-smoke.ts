@@ -105,7 +105,10 @@ async function main() {
   const tools = await mcp.listTools();
   const names = (tools?.result?.tools || []).map((t: any) => t.name);
   assert(names.length >= 20, `tools/list exposes ${names.length} tools`);
-  assert(['resource_add', 'connection_create', 'terraform_run', 'explore'].every((n) => names.includes(n)), 'key tools present');
+  assert(
+    ['resource_add', 'connection_create', 'terraform_run', 'explore', 'environment_add', 'scenario_save', 'scenario_run', 'runs_list'].every((n) => names.includes(n)),
+    'key tools present'
+  );
 
   const call = async (name: string, args: any) => {
     const res = await mcp.callTool(name, args);
@@ -151,18 +154,56 @@ async function main() {
   const lint = await call('project_validate', { env: 'dev' });
   assert(!lint.isError && Array.isArray(lint.json.result.findings), `project_validate: ${lint.json?.result?.findings?.length} findings`);
 
+  // 4b. a custom environment: added, overridden, compiled to its own folder
+  const qa = await call('environment_add', { id: 'qa', copyFrom: 'testing' });
+  assert(!qa.isError && qa.json.result.emulatorPort === 9301, `environment_add qa on port ${qa.json?.result?.emulatorPort}`);
+  const qaOverride = await call('env_override', { id: added.json.result.id, env: 'qa', field: 'point_in_time_recovery', value: true });
+  assert(!qaOverride.isError, 'env_override accepts the new environment');
+  const badEnv = await call('env_enable', { id: added.json.result.id, env: 'nope', enabled: false });
+  assert(badEnv.isError && /env must be one of .*qa/.test(badEnv.text), 'an unknown environment is refused with the valid list');
+
+  // 4c. a scenario, saved with the design
+  const scenario = await call('scenario_save', {
+    scenario: {
+      name: 'queue reaches the worker',
+      steps: [
+        { service: 'sqs', operation: 'send_message', nodeId: queue.json.result.id, input: { body: '{"ping":1}' } },
+        { service: 'lambda', operation: 'logs', nodeId: lambdaId, expect: { contains: ['ping'] }, retrySeconds: 10 },
+      ],
+    },
+  });
+  assert(!scenario.isError && scenario.json.result.steps === 2, `scenario_save → ${scenario.json?.result?.id}`);
+  const listed = await call('scenarios_list', {});
+  assert(listed.json?.scenarios?.length === 1, 'scenarios_list returns it');
+  const run = await call('scenario_run', { env: 'qa' });
+  assert(run.isError && /emulator is not running/.test(run.text), `scenario_run explains a stopped emulator: ${run.text?.slice(0, 70)}`);
+
   const synced = await call('sync', { target: 'emulator' });
   assert(!synced.isError && synced.json.writtenFiles.length > 10, `sync wrote ${synced.json?.writtenFiles?.length} files`);
   assert(
     fs.existsSync(path.join(projectDir, 'terraform-out', 'environments', 'dev', 'main.tf')),
     'terraform compiled into the working dir'
   );
+  assert(
+    fs.existsSync(path.join(projectDir, 'terraform-out', 'environments', 'qa', 'qa.tfvars')),
+    'the custom environment compiled into its own folder'
+  );
 
   // 5. history
   const versions = await call('versions_list', {});
   assert(versions.json.versions.length >= 5, `versions_list: ${versions.json?.versions?.length} versions`);
+  const diff = await call('project_diff', { from: project.json.version, to: versions.json.versions[0].version });
+  assert(
+    !diff.isError && diff.json.diff.environmentChanges.some((c: any) => c.id === 'qa' && c.change === 'added'),
+    'project_diff reports the added environment'
+  );
   const restored = await call('version_restore', { version: project.json.version });
   assert(!restored.isError, `version_restore → v${restored.json?.version}`);
+
+  const events = await call('events_list', {});
+  assert(events.json?.events?.some((e: any) => e.action === 'design.environment.add'), 'events_list records the environment change');
+  const runs = await call('runs_list', {});
+  assert(!runs.isError && Array.isArray(runs.json.runs), `runs_list: ${runs.json?.runs?.length} runs`);
 
   // 6. materialized file matches head (UI can open the same project)
   const head = await post(`/api/projects/${project.json.project.id}`);
@@ -177,8 +218,9 @@ async function main() {
   assert(mcpVersions >= 5, `${mcpVersions} versions recorded with actor 'mcp'`);
 
   mcp.close();
-  server.kill();
+  // Before stopping the server, which is what serves the delete
   await fetch(`http://127.0.0.1:${PORT}/api/projects/${project.json.project.id}`, { method: 'DELETE' }).catch(() => {});
+  server.kill();
   fs.rmSync(projectDir, { recursive: true, force: true });
 
   console.log(process.exitCode ? 'MCP SMOKE FAILED' : 'MCP SMOKE PASSED');

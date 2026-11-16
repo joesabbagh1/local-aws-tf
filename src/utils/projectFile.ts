@@ -1,4 +1,5 @@
 import type { CloudNode, CloudEdge, EnvironmentId, EnvironmentProfile } from '../types/cloud';
+import type { Scenario } from './scenarios';
 
 export const PROJECT_FILE_VERSION = '2.0.0';
 
@@ -7,6 +8,17 @@ export interface ProjectFile {
   environments: Record<EnvironmentId, Omit<EnvironmentProfile, 'color' | 'badgeClass'>>;
   nodes: CloudNode[];
   edges: CloudEdge[];
+  /** Saved end-to-end checks (utils/scenarios.ts). Left out of the file while there are none. */
+  scenarios?: Scenario[];
+}
+
+/** Colours are presentation and come from the app, not the project. */
+export function toProjectEnvironments(
+  environments: Record<EnvironmentId, EnvironmentProfile>
+): ProjectFile['environments'] {
+  return Object.fromEntries(
+    Object.entries(environments).map(([id, { color, badgeClass, ...profile }]) => [id, profile])
+  ) as ProjectFile['environments'];
 }
 
 /**
@@ -17,13 +29,11 @@ export function toProjectFile(state: {
   nodes: CloudNode[];
   edges: CloudEdge[];
   environments: Record<EnvironmentId, EnvironmentProfile>;
+  scenarios?: Scenario[];
 }): ProjectFile {
   return {
     version: PROJECT_FILE_VERSION,
-    // Colours are presentation and come from the app, not the project
-    environments: Object.fromEntries(
-      Object.entries(state.environments).map(([id, { color, badgeClass, ...profile }]) => [id, profile])
-    ) as ProjectFile['environments'],
+    environments: toProjectEnvironments(state.environments),
     nodes: state.nodes.map((node) => {
       const { selected, dragging, measured, resizing, ...rest } = node as CloudNode & { resizing?: boolean };
       const { provisioningStatus, provisionedOutputs, ...data } = rest.data;
@@ -33,6 +43,7 @@ export function toProjectFile(state: {
       const { selected, ...rest } = edge;
       return rest as CloudEdge;
     }),
+    ...(state.scenarios?.length ? { scenarios: state.scenarios } : {}),
   };
 }
 

@@ -189,9 +189,15 @@ test('shows how each service fared on the emulator', async ({ page }) => {
   await expect(inspector(page)).toContainText('Applies and destroys on the emulator');
 
   await page.locator('aside').first().locator('div[draggable="true"]', { hasText: 'Virtual Server Instance' }).click();
-  await expect(inspector(page)).toContainText('Fails on the emulator');
+  await expect(inspector(page)).toContainText('Works on the emulator with an adjustment');
   await page.locator('aside').first().locator('div[draggable="true"]', { hasText: 'Security Group' }).click();
-  await expect(inspector(page)).toContainText('Works on the emulator with a second Apply');
+  await expect(inspector(page)).toContainText('Works on the emulator; LocalCloud applies twice');
+});
+
+test('keeps deprecated services out of the catalog', async ({ page }) => {
+  const catalog = page.locator('aside').first();
+  await catalog.getByPlaceholder(/Search \d+ services/).fill('bedrock');
+  await expect(catalog).toContainText('No services match');
 });
 
 test('previews the AWS export next to the emulator build', async ({ page }) => {
@@ -200,4 +206,64 @@ test('previews the AWS export next to the emulator build', async ({ page }) => {
   await inspector(page).getByRole('button', { name: 'backend', exact: true }).click();
   await expect(inspector(page)).toContainText('backend "s3" {}');
   await expect(inspector(page)).toContainText('terraform-aws/environments/dev/');
+});
+
+test('adds an environment that compiles and deploys like the others, and removes it again', async ({ page }) => {
+  await tab(page, 'Envs');
+  await inspector(page).locator('input[aria-label="New environment name"]').fill('qa');
+  await inspector(page).locator('select[aria-label="Start the new environment from"]').selectOption('testing');
+  await inspector(page).getByRole('button', { name: 'Add', exact: true }).click();
+
+  // It becomes the active environment, with its own port
+  await expect(page.locator('header nav[aria-label="Environment"]')).toContainText('qa');
+  await expect(page.locator('header button', { hasText: 'Apply qa' })).toBeVisible();
+  await expect(page.locator('header')).toContainText('127.0.0.1:9301');
+  await expect.poll(() => Object.keys(projectFile().environments)).toContain('qa');
+
+  await page.locator('header button', { hasText: 'Sync' }).click();
+  const tfvars = path.join(E2E_PROJECT_DIR, 'terraform-out/environments/qa/qa.tfvars');
+  await expect.poll(() => (fs.existsSync(tfvars) ? fs.readFileSync(tfvars, 'utf-8') : '')).toContain('emulator_port     = 9301');
+
+  // A bad name is refused with the reason
+  await inspector(page).locator('input[aria-label="New environment name"]').fill('QA Env');
+  await inspector(page).getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(inspector(page)).toContainText('lowercase letters');
+
+  await inspector(page).getByRole('button', { name: 'Remove qa' }).click();
+  await inspector(page).getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(page.locator('header nav[aria-label="Environment"]')).not.toContainText('qa');
+  await expect.poll(() => Object.keys(projectFile().environments)).not.toContain('qa');
+});
+
+test('shows what each version changed and restores an old one', async ({ page }) => {
+  await node(page, 'Orders API Handler').click();
+  await inspector(page).locator('input').first().fill('Orders API v2');
+  await expect.poll(() => projectFile().nodes.some((n: any) => n.data.label === 'Orders API v2')).toBe(true);
+
+  await page.locator('header').getByRole('button', { name: 'History', exact: true }).click();
+  const main = page.locator('main');
+  await expect(main).toContainText('Version 2');
+  await expect(main).toContainText('Orders API Handler');
+  await expect(main).toContainText('Orders API v2');
+
+  // Version 1 is the canvas before the rename
+  await main.locator('aside button', { hasText: 'v1' }).click();
+  await main.getByRole('button', { name: 'Restore this version' }).click();
+  await main.getByRole('button', { name: 'Restore', exact: true }).click();
+  await expect(page.locator('header')).toContainText('v3');
+  await expect.poll(() => projectFile().nodes.some((n: any) => n.data.label === 'Orders API Handler')).toBe(true);
+});
+
+test('builds a scenario from the Data tab and says when the emulator is not running', async ({ page }) => {
+  await node(page, 'Order Fulfillment Queue').click();
+  await tab(page, 'Data');
+  await expect(inspector(page).locator('select[aria-label="Service"]')).toHaveValue('sqs');
+  await inspector(page).getByRole('button', { name: 'Step', exact: false }).click();
+
+  // Adding a step opens the scenario, which is saved with the project
+  await expect(inspector(page)).toContainText('Send · Order Fulfillment Queue');
+  await expect.poll(() => projectFile().scenarios?.[0]?.steps?.[0]).toMatchObject({ service: 'sqs', operation: 'send_message' });
+
+  await inspector(page).locator('section').getByRole('button', { name: 'Run', exact: true }).click();
+  await expect(inspector(page)).toContainText('emulator is not running');
 });

@@ -7,7 +7,15 @@ import { createServiceNode } from '../../src/utils/nodeFactory';
 import { normalizeNodes, releaseChildren, reparentNode } from '../../src/utils/canvasLayout';
 import { parseTerraformHclToCanvas } from '../../src/utils/hclImporter';
 import { runArchitectureLinter } from '../../src/utils/architectureValidator';
-import type { ProjectFile } from '../../src/utils/projectFile';
+import { toProjectEnvironments, type ProjectFile } from '../../src/utils/projectFile';
+import {
+  addEnvironment,
+  envIdsOf,
+  removeEnvironment,
+  resolveEnvironments,
+  validateEnvId,
+} from '../../src/utils/environments';
+import { parseScenario } from '../../src/utils/scenarios';
 
 /**
  * Headless design mutations, one op = one function over the design document. The ops route loads
@@ -19,8 +27,6 @@ import type { ProjectFile } from '../../src/utils/projectFile';
 export type DesignOpResult =
   | { ok: true; doc: ProjectFile; result: Record<string, unknown> }
   | { ok: false; error: string; status?: number };
-
-const ENV_IDS = ['dev', 'testing', 'staging', 'prod'] as const;
 
 function nodesOf(doc: ProjectFile): CloudNode[] {
   return doc.nodes as CloudNode[];
@@ -38,8 +44,9 @@ function findNode(doc: ProjectFile, id: string): CloudNode | null {
   return nodesOf(doc).find((n) => n.id === id) ?? null;
 }
 
-function parseEnv(value: unknown): EnvironmentId | null {
-  return typeof value === 'string' && (ENV_IDS as readonly string[]).includes(value) ? (value as EnvironmentId) : null;
+/** The project's own environments (the four defaults unless it added or removed some). */
+function envsOf(doc: ProjectFile) {
+  return resolveEnvironments(doc.environments);
 }
 
 /** Field keys a service accepts, for refusing unknown keys with something actionable. */
@@ -66,6 +73,9 @@ export function applyDesignOp(op: string, doc: ProjectFile, args: DesignOpArgs):
     const v = args[key];
     return typeof v === 'string' && v.trim() ? v : null;
   };
+  const ENV_IDS = envIdsOf(envsOf(doc));
+  const parseEnv = (value: unknown): EnvironmentId | null =>
+    typeof value === 'string' && ENV_IDS.includes(value) ? value : null;
 
   switch (op) {
     case 'resource.add': {
@@ -75,6 +85,8 @@ export function applyDesignOp(op: string, doc: ProjectFile, args: DesignOpArgs):
       const parentNode = parent ? findNode(doc, parent) : null;
       if (parent && !parentNode) return { ok: false, error: `parent ${parent} not found`, status: 404 };
 
+      const deprecated = SERVICE_BY_TYPE[serviceType]?.deprecated;
+      if (deprecated) return { ok: false, error: `${serviceType} can't be added to new designs. ${deprecated}`, status: 400 };
       const created = createServiceNode(serviceType, nodesOf(doc), undefined);
       if (!created) return { ok: false, error: `Unknown service type ${serviceType}. Use catalog_list to see valid typeIds.`, status: 400 };
 
@@ -214,7 +226,7 @@ export function applyDesignOp(op: string, doc: ProjectFile, args: DesignOpArgs):
       if (typeof args.enabled !== 'boolean') return { ok: false, error: 'enabled must be true or false', status: 400 };
 
       const nodes = nodesOf(doc).map((n) =>
-        n.id === id ? { ...n, data: { ...n.data, envEnabled: { ...(n.data.envEnabled ?? {}), [env]: args.enabled } } } : n
+        n.id === id ? { ...n, data: { ...n.data, envEnabled: { ...(n.data.envEnabled ?? {}), [env]: args.enabled as boolean } } } : n
       );
       return { ok: true, doc: withParts(doc, nodes), result: { id, env, enabled: args.enabled as boolean } };
     }
@@ -305,9 +317,109 @@ export function applyDesignOp(op: string, doc: ProjectFile, args: DesignOpArgs):
       };
     }
 
+    case 'environment.add': {
+      const id = requireString('id');
+      if (!id) return { ok: false, error: 'id is required (e.g. "qa")', status: 400 };
+      const problem = validateEnvId(id, ENV_IDS);
+      if (problem) return { ok: false, error: problem, status: 400 };
+      const copyFrom = args.copyFrom === undefined ? undefined : parseEnv(args.copyFrom);
+      if (args.copyFrom !== undefined && !copyFrom) {
+        return { ok: false, error: `copyFrom must be one of ${ENV_IDS.join(', ')}`, status: 400 };
+      }
+      const next = addEnvironment({ nodes: nodesOf(doc), environments: envsOf(doc) }, id, {
+        name: requireString('name') ?? undefined,
+        region: requireString('region') ?? undefined,
+        copyFrom: copyFrom ?? undefined,
+      });
+      const profile = next.environments[id];
+      return {
+        ok: true,
+        doc: { ...doc, nodes: next.nodes, environments: toProjectEnvironments(next.environments) },
+        result: { id, name: profile.name, region: profile.region, emulatorPort: profile.emulatorPort, ...(copyFrom ? { copiedFrom: copyFrom } : {}) },
+      };
+    }
+
+    case 'environment.update': {
+      const id = parseEnv(args.id);
+      if (!id) return { ok: false, error: `id must be one of ${ENV_IDS.join(', ')}`, status: 400 };
+      const environments = envsOf(doc);
+      const patch: Record<string, unknown> = {};
+      if (args.name !== undefined) {
+        if (!requireString('name')) return { ok: false, error: 'name must be a non-empty string', status: 400 };
+        patch.name = (args.name as string).trim();
+      }
+      if (args.region !== undefined) {
+        if (typeof args.region !== 'string' || !/^[a-z]{2}(-[a-z]+)+-\d$/.test(args.region)) {
+          return { ok: false, error: 'region must look like us-east-1', status: 400 };
+        }
+        patch.region = args.region;
+      }
+      if (args.emulatorPort !== undefined) {
+        const port = Number(args.emulatorPort);
+        if (!Number.isInteger(port) || port < 1024 || port > 65535) return { ok: false, error: 'emulatorPort must be 1024–65535', status: 400 };
+        const taken = Object.values(environments).find((e) => e.id !== id && e.emulatorPort === port);
+        if (taken) return { ok: false, error: `Port ${port} is already used by ${taken.id}`, status: 400 };
+        patch.emulatorPort = port;
+        patch.emulatorEndpoint = `https://127.0.0.1:${port}`;
+      }
+      if (args.production !== undefined) {
+        if (typeof args.production !== 'boolean') return { ok: false, error: 'production must be true or false', status: 400 };
+        patch.production = args.production;
+      }
+      if (args.usage !== undefined) {
+        if (!args.usage || typeof args.usage !== 'object') return { ok: false, error: 'usage must be an object', status: 400 };
+        const usage = { ...environments[id].usage };
+        for (const key of ['requestsMillions', 'dataTransferGb', 'storageGb', 'logsGb'] as const) {
+          const value = (args.usage as Record<string, unknown>)[key];
+          if (value === undefined) continue;
+          if (typeof value !== 'number' || !(value >= 0)) return { ok: false, error: `usage.${key} must be a number ≥ 0`, status: 400 };
+          usage[key] = value;
+        }
+        patch.usage = usage;
+      }
+      if (!Object.keys(patch).length) {
+        return { ok: false, error: 'Provide name, region, emulatorPort, production and/or usage', status: 400 };
+      }
+      const next = { ...environments, [id]: { ...environments[id], ...patch } };
+      return { ok: true, doc: { ...doc, environments: toProjectEnvironments(next) }, result: { id, updated: Object.keys(patch) } };
+    }
+
+    case 'environment.remove': {
+      const id = parseEnv(args.id);
+      if (!id) return { ok: false, error: `id must be one of ${ENV_IDS.join(', ')}`, status: 400 };
+      if (ENV_IDS.length <= 1) return { ok: false, error: 'A project needs at least one environment', status: 400 };
+      const next = removeEnvironment({ nodes: nodesOf(doc), environments: envsOf(doc) }, id);
+      return {
+        ok: true,
+        doc: { ...doc, nodes: next.nodes, environments: toProjectEnvironments(next.environments) },
+        result: { id, removed: true, note: `terraform-out/environments/${id} and its state are left on disk; destroy it first if resources are still applied.` },
+      };
+    }
+
+    case 'scenario.save': {
+      const parsed = parseScenario(args.scenario, () => `sc-${nowId()}-${Math.random().toString(36).slice(2, 6)}`);
+      if ('error' in parsed) return { ok: false, error: parsed.error, status: 400 };
+      const missing = parsed.scenario.steps.find((step) => step.nodeId && !findNode(doc, step.nodeId));
+      if (missing) return { ok: false, error: `step resource ${missing.nodeId} not found`, status: 404 };
+      const existing = doc.scenarios ?? [];
+      const scenarios = existing.some((sc) => sc.id === parsed.scenario.id)
+        ? existing.map((sc) => (sc.id === parsed.scenario.id ? parsed.scenario : sc))
+        : [...existing, parsed.scenario];
+      return { ok: true, doc: { ...doc, scenarios }, result: { id: parsed.scenario.id, name: parsed.scenario.name, steps: parsed.scenario.steps.length } };
+    }
+
+    case 'scenario.remove': {
+      const id = requireString('id');
+      const existing = doc.scenarios ?? [];
+      if (!id || !existing.some((sc) => sc.id === id)) return { ok: false, error: `scenario ${id} not found`, status: 404 };
+      const scenarios = existing.filter((sc) => sc.id !== id);
+      const { scenarios: _drop, ...rest } = doc;
+      return { ok: true, doc: scenarios.length ? { ...doc, scenarios } : rest, result: { id, removed: true } };
+    }
+
     case 'project.validate': {
-      const env = parseEnv(args.env) ?? 'dev';
-      const findings = runArchitectureLinter(nodesOf(doc), edgesOf(doc), env);
+      const env = parseEnv(args.env) ?? ENV_IDS[0];
+      const findings = runArchitectureLinter(nodesOf(doc), edgesOf(doc), env, envsOf(doc));
       return {
         ok: true,
         doc,

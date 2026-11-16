@@ -1,14 +1,19 @@
-import type { CloudNode, CloudEdge, EnvironmentId, LintFinding } from '../types/cloud';
+import type { CloudNode, CloudEdge, EnvironmentId, EnvironmentProfile, LintFinding } from '../types/cloud';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import { resolveNodeConfigForEnv } from './terraformCompiler';
 import { emulatorSupport } from './emulatorSupport';
+import { isProductionEnv } from './environments';
 
 export function runArchitectureLinter(
   nodes: CloudNode[],
   edges: CloudEdge[],
-  activeEnv: EnvironmentId
+  activeEnv: EnvironmentId,
+  /** The project's environments; decides which ones get the production-only checks. */
+  environments?: Partial<Record<EnvironmentId, Pick<EnvironmentProfile, 'production'>>>
 ): LintFinding[] {
   const findings: LintFinding[] = [];
+  const isProd = isProductionEnv({ id: activeEnv, production: environments?.[activeEnv]?.production });
+  const envTag = activeEnv.toUpperCase();
   const activeNodes = nodes.filter((n) => n.data.envEnabled?.[activeEnv] !== false);
   const nodeById = Object.fromEntries(activeNodes.map((n) => [n.id, n]));
 
@@ -58,17 +63,17 @@ export function runArchitectureLinter(
     }
 
     // 3. Production RDS Single-AZ or Skip Final Snapshot check
-    if (type === 'aws_db_instance' && activeEnv === 'prod') {
+    if (type === 'aws_db_instance' && isProd) {
       if (!cfg.multi_az) {
         findings.push({
           id: `rds-multiaz-${node.id}`,
           severity: 'warning',
           category: 'Reliability',
           title: `Production RDS "${node.data.label}" is Single-AZ`,
-          description: `Multi-AZ standby deployment is disabled in PROD. Enable multi_az for automatic failover protection.`,
+          description: `Multi-AZ standby deployment is disabled in ${envTag}. Enable multi_az for automatic failover protection.`,
           nodeId: node.id,
-          envId: 'prod',
-          remediation: 'Toggle "Multi-AZ Standby Deployment" on for PROD.',
+          envId: activeEnv,
+          remediation: `Toggle "Multi-AZ Standby Deployment" on for ${envTag}.`,
         });
       }
       if (cfg.skip_final_snapshot) {
@@ -77,9 +82,9 @@ export function runArchitectureLinter(
           severity: 'info',
           category: 'Reliability',
           title: `Production RDS "${node.data.label}" skips final snapshot`,
-          description: `skip_final_snapshot is true in PROD. Set to false to retain a recovery snapshot on deletion.`,
+          description: `skip_final_snapshot is true in ${envTag}. Set to false to retain a recovery snapshot on deletion.`,
           nodeId: node.id,
-          envId: 'prod',
+          envId: activeEnv,
         });
       }
     }
@@ -102,39 +107,50 @@ export function runArchitectureLinter(
     }
 
     // 5. SQS Queue without DLQ in Production
-    if (type === 'aws_sqs_queue' && activeEnv === 'prod' && !cfg.enable_dlq) {
+    if (type === 'aws_sqs_queue' && isProd && !cfg.enable_dlq) {
       findings.push({
         id: `sqs-dlq-${node.id}`,
         severity: 'warning',
         category: 'Reliability',
         title: `SQS Queue "${node.data.label}" has no Dead-Letter Queue (DLQ)`,
-        description: `Poison-pill messages in PROD could loop until retention expiry. Enable companion DLQ generation.`,
+        description: `Poison-pill messages in ${envTag} could loop until retention expiry. Enable companion DLQ generation.`,
         nodeId: node.id,
-        envId: 'prod',
+        envId: activeEnv,
       });
     }
 
     // 6. Cognito MFA disabled in Production
     if (
       type === 'aws_cognito_user_pool' &&
-      activeEnv === 'prod' &&
+      isProd &&
       cfg.mfa_configuration === 'OFF'
     ) {
       findings.push({
         id: `cognito-mfa-${node.id}`,
         severity: 'warning',
         category: 'Security',
-        title: `Cognito Pool "${node.data.label}" has MFA disabled in PROD`,
+        title: `Cognito Pool "${node.data.label}" has MFA disabled in ${envTag}`,
         description: `Consider setting mfa_configuration to OPTIONAL or ON for production customer identity pools.`,
         nodeId: node.id,
-        envId: 'prod',
+        envId: activeEnv,
       });
     }
 
     // 7. Services the emulator test run found failing (npm run test:emulator)
     const svc = SERVICE_BY_TYPE[type];
     const support = emulatorSupport(svc);
-    if (support.level === 'fails') {
+    if (svc?.deprecated) {
+      findings.push({
+        id: `deprecated-${node.id}`,
+        severity: 'warning',
+        category: 'Emulator',
+        title: `${svc.shortName} is deprecated`,
+        description: svc.deprecated,
+        nodeId: node.id,
+        envId: activeEnv,
+        remediation: 'It still compiles and exports, but new designs should use the replacement.',
+      });
+    } else if (support.level === 'fails') {
       findings.push({
         id: `emulator-support-${node.id}`,
         severity: 'warning',
@@ -144,6 +160,31 @@ export function runArchitectureLinter(
         nodeId: node.id,
         envId: activeEnv,
         remediation: 'Expect apply to fail locally for this resource. The AWS export is not affected.',
+      });
+    }
+  }
+
+  // S3 refuses two notifications for the same events on the same keys
+  const NOTIFIED = new Set(['aws_lambda_function', 'aws_sqs_queue', 'aws_sns_topic']);
+  for (const bucket of activeNodes.filter((n) => n.data.serviceType === 'aws_s3_bucket')) {
+    const notified = edges.filter(
+      (e) =>
+        e.source === bucket.id &&
+        e.data?.relationshipType !== 'depends_on' &&
+        NOTIFIED.has(nodeById[e.target]?.data.serviceType ?? '')
+    );
+    const prefixes = notified.map((e) => (/^[^\s]+\/$/.test(String(e.data?.label || '').trim()) ? String(e.data?.label).trim() : ''));
+    const overlap = prefixes.some((p, i) => prefixes.some((q, j) => i !== j && (p.startsWith(q) || q.startsWith(p))));
+    if (notified.length > 1 && overlap) {
+      findings.push({
+        id: `s3-overlap-${bucket.id}`,
+        severity: 'warning',
+        category: 'Reliability',
+        title: `S3 Bucket "${bucket.data.label}" notifies ${notified.length} targets about the same objects`,
+        description: `AWS rejects overlapping notifications on one bucket, so apply fails outside the emulator.`,
+        nodeId: bucket.id,
+        envId: activeEnv,
+        remediation: 'Give each connection a key prefix as its label (e.g. "uploads/"), or notify one SNS topic and fan out from there.',
       });
     }
   }

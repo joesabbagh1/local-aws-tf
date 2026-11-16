@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useCloudStore, type ActiveProject } from '../store/useCloudStore';
-import type { EnvironmentId } from '../types/cloud';
 import {
   LayoutGrid,
   Trash2,
@@ -18,8 +17,7 @@ import {
 } from 'lucide-react';
 import { Button, IconButton, EnvDot, Segmented, cn, fieldCls } from './ui';
 import { planHasChanges } from '../utils/planSummary';
-
-const ENV_ORDER: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
+import { envIdsOf, envLabel } from '../utils/environments';
 
 export function TopNavBar() {
   const activeEnv = useCloudStore((s) => s.activeEnv);
@@ -114,9 +112,9 @@ export function TopNavBar() {
 
   return (
     <>
-    <header className="h-12 shrink-0 bg-panel border-b border-line pl-4 pr-3 flex items-center gap-4 select-none z-30">
+    <header className="h-12 shrink-0 bg-panel border-b border-line pl-4 pr-3 flex items-center gap-3 2xl:gap-4 select-none z-30">
       {/* Brand */}
-      <div className="flex items-center gap-2.5 shrink-0 w-[224px]">
+      <div className="flex items-center gap-2.5 shrink-0 2xl:w-[224px]">
         <div className="w-5 h-5 rounded-[5px] bg-accent flex items-center justify-center">
           <span className="w-2 h-2 rounded-[2px] bg-accent-ink" />
         </div>
@@ -131,7 +129,7 @@ export function TopNavBar() {
           value={activeProject?.id ?? ''}
           onChange={(e) => e.target.value && openProject(e.target.value)}
           disabled={projects.length === 0}
-          className="h-7 px-1.5 text-[12.5px] bg-panel border border-line rounded-md text-fg max-w-[200px] truncate"
+          className="h-7 px-1.5 text-[12.5px] bg-panel border border-line rounded-md text-fg max-w-[150px] 2xl:max-w-[200px] truncate"
           title={activeProject ? `${activeProject.name} — ${activeProject.working_dir}` : 'No projects yet'}
         >
           {projects.length === 0 && <option value="">{activeProject?.name || 'No project'}</option>}
@@ -155,8 +153,8 @@ export function TopNavBar() {
       </div>
 
       {/* Environment switcher */}
-      <nav className="flex items-center h-full" aria-label="Environment">
-        {ENV_ORDER.map((envId) => {
+      <nav className="flex items-center h-full shrink-0 max-w-[36vw] overflow-x-auto" aria-label="Environment">
+        {envIdsOf(environments).map((envId) => {
           const env = environments[envId];
           const isActive = activeEnv === envId;
           const activeNodeCount = nodes.filter((n) => n.data.envEnabled?.[envId] !== false).length;
@@ -171,19 +169,19 @@ export function TopNavBar() {
                 portOnline ? 'running' : 'stopped'
               }`}
               className={cn(
-                'relative h-full px-3 flex items-center gap-2 text-[14px] transition-colors',
+                'relative h-full px-3 shrink-0 flex items-center gap-2 text-[14px] transition-colors',
                 isActive ? 'text-fg' : 'text-fg-muted hover:text-fg'
               )}
             >
               <EnvDot color={env.color} hollow={!portOnline} />
-              <span>{envId === 'testing' ? 'test' : envId}</span>
+              <span>{envLabel(envId)}</span>
               {isActive && <span className="absolute left-3 right-3 -bottom-px h-px bg-fg" />}
             </button>
           );
         })}
       </nav>
 
-      <span className="w-px h-5 bg-line" />
+      <span className="hidden 2xl:block w-px h-5 bg-line" />
 
       <Segmented
         value={view}
@@ -191,6 +189,7 @@ export function TopNavBar() {
         options={[
           { value: 'design', label: 'Design' },
           { value: 'costs', label: 'Costs' },
+          { value: 'history', label: 'History' },
         ]}
       />
 
@@ -199,7 +198,7 @@ export function TopNavBar() {
       {/* Where the design is saved */}
       {activeProject && (
         <span
-          className="hidden xl:flex items-center gap-1.5 text-[12.5px] text-fg-faint"
+          className="hidden xl:flex items-center gap-1.5 text-[12.5px] text-fg-faint whitespace-nowrap font-mono"
           title={
             projectFile.state === 'error'
               ? `Save failed: ${projectFile.error}`
@@ -212,7 +211,7 @@ export function TopNavBar() {
               projectFile.state === 'error' ? 'bg-err' : projectFile.state === 'saving' ? 'bg-warn' : 'bg-ok'
             )}
           />
-          {activeProject.name} · v{projectVersion}
+          v{projectVersion}
         </span>
       )}
 
@@ -232,12 +231,12 @@ export function TopNavBar() {
         </IconButton>
       </div>
 
-      <span className="w-px h-5 bg-line" />
+      <span className="hidden 2xl:block w-px h-5 bg-line" />
 
       <div className="flex items-center gap-1">
         <Button variant="ghost" onClick={() => setTemplateModalOpen(true)}>
           <LayoutTemplate className="w-3.5 h-3.5" />
-          <span className="hidden lg:inline">Blueprints</span>
+          <span className="hidden 2xl:inline">Blueprints</span>
         </Button>
         <Button
           variant="ghost"
@@ -245,7 +244,7 @@ export function TopNavBar() {
           title="Import Terraform, or save / load a project file"
         >
           <FileInput className="w-3.5 h-3.5" />
-          <span className="hidden lg:inline">Import</span>
+          <span className="hidden 2xl:inline">Import</span>
         </Button>
         <Button
           variant="ghost"
@@ -253,16 +252,16 @@ export function TopNavBar() {
           title="Write Terraform for your real AWS accounts to ./terraform-aws"
         >
           <FileOutput className="w-3.5 h-3.5" />
-          <span className="hidden lg:inline">Export for AWS</span>
+          <span className="hidden 2xl:inline">Export for AWS</span>
         </Button>
       </div>
 
-      <span className="w-px h-5 bg-line" />
+      <span className="hidden 2xl:block w-px h-5 bg-line" />
 
       <div className="flex items-center gap-2">
         {/* Everything the app runs goes to this environment's local emulator */}
         <span
-          className="h-7 px-1 text-xs font-mono text-fg-muted flex items-center gap-1.5"
+          className="hidden 2xl:flex h-7 px-1 text-xs font-mono text-fg-muted items-center gap-1.5 whitespace-nowrap"
           title={`Plan and apply run against the ${activeEnv} emulator. Use Export for AWS to deploy for real.`}
         >
           <span className="font-sans text-fg-faint">emulator</span>

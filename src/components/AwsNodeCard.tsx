@@ -1,14 +1,13 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import type { CloudNode, EnvironmentId } from '../types/cloud';
+import type { CloudNode } from '../types/cloud';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import { useCloudStore } from '../store/useCloudStore';
 import { CARD_WIDTH } from '../utils/canvasLayout';
 import { Copy, Trash2, Loader2, Database } from 'lucide-react';
 import { EnvDot, ServiceGlyph, cn } from './ui';
 import { PLAN_ACTION_STYLE } from './PlanReviewBar';
-
-const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
+import { envLabel } from '../utils/environments';
 
 export const AwsNodeCard = memo(({ id, data, selected }: NodeProps<CloudNode>) => {
   const activeEnv = useCloudStore((s) => s.activeEnv);
@@ -150,8 +149,13 @@ export const AwsNodeCard = memo(({ id, data, selected }: NodeProps<CloudNode>) =
 
       {/* Footer: environment presence + live status */}
       <div className="h-7 px-3 flex items-center justify-between border-t border-line">
-        <div className="flex items-center gap-1" title="Deployed in dev · test · staging · prod">
-          {ENV_IDS.map((envId) => (
+        <div
+          className="flex items-center gap-1"
+          title={Object.keys(environments)
+            .map((envId) => `${envLabel(envId)}${data.envEnabled?.[envId] === false ? ' (off)' : ''}`)
+            .join(' · ')}
+        >
+          {Object.keys(environments).map((envId) => (
             <EnvDot
               key={envId}
               color={environments[envId].color}

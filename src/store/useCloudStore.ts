@@ -18,12 +18,20 @@ import type {
 } from '../types/cloud';
 import { DEFAULT_ENVIRONMENTS } from '../data/awsCatalog';
 import { ARCHITECTURE_TEMPLATES } from '../data/templates';
-import { ENV_ORDER, buildTerraformFiles, planFingerprint } from '../utils/terraformBundle';
+import { planFingerprint } from '../utils/terraformBundle';
+import {
+  addEnvironment as addEnvironmentToDesign,
+  envIdsOf,
+  removeEnvironment as removeEnvironmentFromDesign,
+  resolveEnvironments,
+  validateEnvId,
+} from '../utils/environments';
 import { createServiceNode } from '../utils/nodeFactory';
 import { statusFromState } from '../utils/terraformState';
 import { checkConnection } from '../utils/connectionRules';
 import { parseTerraformHclToCanvas, type HclImportResult } from '../utils/hclImporter';
 import { toProjectFile, withRuntimeStateFrom } from '../utils/projectFile';
+import type { Scenario, ScenarioRunResult } from '../utils/scenarios';
 import {
   buildResourceNameResolver,
   planHasChanges,
@@ -47,8 +55,8 @@ export type RightDrawerTab =
   | 'explorer'
   | 'audit';
 
-/** The main area: the architecture canvas or the cost analytics page. */
-export type WorkspaceView = 'design' | 'costs';
+/** The main area: the architecture canvas, the cost analytics page, or the project's history. */
+export type WorkspaceView = 'design' | 'costs' | 'history';
 
 export type TerraformCommand = 'init' | 'validate' | 'plan' | 'apply' | 'destroy';
 
@@ -91,6 +99,11 @@ interface CloudStudioState {
   edges: CloudEdge[];
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
+  /** Saved end-to-end checks; part of the project like the canvas. */
+  scenarios: Scenario[];
+  /** The last result of each scenario in this tab, keyed by scenario id then environment. */
+  scenarioResults: Record<string, Record<EnvironmentId, ScenarioRunResult>>;
+  runningScenarioId: string | null;
 
   // Undo / Redo History
   past: HistorySnapshot[];
@@ -127,6 +140,10 @@ interface CloudStudioState {
 
   setActiveEnv: (env: EnvironmentId) => void;
   updateEnvironmentProfile: (env: EnvironmentId, patch: Partial<EnvironmentProfile>) => void;
+  /** Adds an environment, optionally as a copy of another one's settings and overrides. Returns why it couldn't. */
+  addEnvironment: (id: EnvironmentId, options?: { name?: string; copyFrom?: EnvironmentId }) => string | null;
+  /** Removes an environment and every resource's overrides for it. Its Terraform folder and state stay on disk. */
+  removeEnvironment: (id: EnvironmentId) => void;
 
   onNodesChange: OnNodesChange<CloudNode>;
   onEdgesChange: OnEdgesChange<CloudEdge>;
@@ -166,6 +183,14 @@ interface CloudStudioState {
   updateNodeTags: (nodeId: string, tags: Record<string, string>) => void;
 
   updateEdgeData: (edgeId: string, patch: Partial<NonNullable<CloudEdge['data']>>) => void;
+
+  /** Adds a scenario, or replaces the one with the same id. */
+  saveScenario: (scenario: Scenario) => void;
+  removeScenario: (scenarioId: string) => void;
+  /** Runs a scenario against the active environment's emulator; the result lands in scenarioResults. */
+  runScenario: (scenarioId: string) => Promise<ScenarioRunResult | { error: string }>;
+  /** Makes an old version the head again (as a new version), then reloads onto it. */
+  restoreVersion: (version: number) => Promise<{ ok: boolean; error?: string }>;
 
   loadTemplate: (templateId: string) => void;
   importTerraformHcl: (hclText: string) => HclImportResult;
@@ -230,17 +255,9 @@ function withProvisioningState(
   });
 }
 
-/** Environment colours are presentation, not user settings; always take the current ones. */
-function withCurrentEnvironmentColors(
-  environments: Partial<Record<EnvironmentId, EnvironmentProfile>> | undefined
-): Record<EnvironmentId, EnvironmentProfile> | undefined {
-  if (!environments) return undefined;
-  return Object.fromEntries(
-    ENV_ORDER.map((id) => [
-      id,
-      { ...DEFAULT_ENVIRONMENTS[id], ...environments[id], color: DEFAULT_ENVIRONMENTS[id].color },
-    ])
-  ) as Record<EnvironmentId, EnvironmentProfile>;
+/** The environment to show when the remembered one no longer exists in the project. */
+function validActiveEnv(activeEnv: EnvironmentId, environments: Record<EnvironmentId, EnvironmentProfile>): EnvironmentId {
+  return environments[activeEnv] ? activeEnv : envIdsOf(environments)[0];
 }
 
 // Disk copy of the project. Saving starts only after the first load, so a fresh tab can never
@@ -298,6 +315,9 @@ export const useCloudStore = create<CloudStudioState>()(
       edges: initialTemplate.edges,
       selectedNodeId: initialTemplate.nodes[2]?.id || null,
       selectedEdgeId: null,
+      scenarios: [],
+      scenarioResults: {},
+      runningScenarioId: null,
 
       past: [],
       future: [],
@@ -317,7 +337,7 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       terminalLogs: [
-        'LocalCloud Studio ready. Emulator ports: dev 9297, testing 9298, staging 9299, prod 9300.',
+        'LocalCloud Studio ready. Each environment has its own emulator port (see the Envs tab).',
       ],
       isRunningCommand: false,
       runningCommand: null,
@@ -379,7 +399,30 @@ export const useCloudStore = create<CloudStudioState>()(
         });
       },
 
-      setActiveEnv: (env) => set({ activeEnv: env }),
+      setActiveEnv: (env) => {
+        if (get().environments[env]) set({ activeEnv: env });
+      },
+
+      addEnvironment: (id, options) => {
+        const { environments, nodes } = get();
+        const problem = validateEnvId(id, envIdsOf(environments));
+        if (problem) return problem;
+        const next = addEnvironmentToDesign({ environments, nodes }, id, options);
+        set({ environments: next.environments, nodes: next.nodes, activeEnv: id });
+        return null;
+      },
+
+      removeEnvironment: (id) => {
+        const { environments, nodes, activeEnv, pendingPlan } = get();
+        const next = removeEnvironmentFromDesign({ environments, nodes }, id);
+        if (next.environments === environments) return;
+        set({
+          environments: next.environments,
+          nodes: next.nodes,
+          activeEnv: validActiveEnv(activeEnv === id ? '' : activeEnv, next.environments),
+          pendingPlan: pendingPlan?.envId === id ? null : pendingPlan,
+        });
+      },
 
       updateEnvironmentProfile: (env, patch) =>
         set((state) => ({
@@ -674,6 +717,71 @@ export const useCloudStore = create<CloudStudioState>()(
         }));
       },
 
+      saveScenario: (scenario) =>
+        set((state) => ({
+          scenarios: state.scenarios.some((sc) => sc.id === scenario.id)
+            ? state.scenarios.map((sc) => (sc.id === scenario.id ? scenario : sc))
+            : [...state.scenarios, scenario],
+        })),
+
+      removeScenario: (scenarioId) =>
+        set((state) => {
+          const { [scenarioId]: _dropped, ...scenarioResults } = state.scenarioResults;
+          return { scenarios: state.scenarios.filter((sc) => sc.id !== scenarioId), scenarioResults };
+        }),
+
+      runScenario: async (scenarioId) => {
+        const { activeProject, activeEnv, scenarios } = get();
+        const scenario = scenarios.find((sc) => sc.id === scenarioId);
+        if (!activeProject || !scenario) return { error: 'No project or scenario' };
+        set({ runningScenarioId: scenarioId });
+        try {
+          // The steps name canvas resources, which the backend resolves against the saved design
+          await saveProjectToDisk();
+          const res = await fetch(`/api/projects/${activeProject.id}/scenarios/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ envId: activeEnv, scenario }),
+          });
+          const data = await res.json();
+          const result = data.results?.[0] as ScenarioRunResult | undefined;
+          if (!result) return { error: data.error || `HTTP ${res.status}` };
+          set((state) => ({
+            scenarioResults: {
+              ...state.scenarioResults,
+              [scenarioId]: { ...(state.scenarioResults[scenarioId] || {}), [activeEnv]: result },
+            },
+          }));
+          return result;
+        } catch (err: any) {
+          return { error: err?.message || 'The local API is not reachable' };
+        } finally {
+          set({ runningScenarioId: null });
+        }
+      },
+
+      restoreVersion: async (version) => {
+        const { activeProject } = get();
+        if (!activeProject) return { ok: false, error: 'No active project' };
+        try {
+          // Anything still unsaved becomes its own version first, so the restore lands on top of it
+          await saveProjectToDisk();
+          const res = await fetch(`/api/projects/${activeProject.id}/versions/${version}/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          const data = await res.json();
+          if (!data.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+          // Stop saving: the tab's canvas is now behind the head, and the reload picks the head up
+          projectDisk.ready = false;
+          window.location.reload();
+          return { ok: true };
+        } catch (err: any) {
+          return { ok: false, error: err?.message || 'The local API is not reachable' };
+        }
+      },
+
       loadTemplate: (templateId) => {
         const tpl = ARCHITECTURE_TEMPLATES.find((t) => t.id === templateId);
         if (!tpl) return;
@@ -704,7 +812,7 @@ export const useCloudStore = create<CloudStudioState>()(
       },
 
       exportProjectJson: () => {
-        const { nodes, edges, environments, activeEnv } = get();
+        const { nodes, edges, environments, activeEnv, scenarios } = get();
         return JSON.stringify(
           {
             version: '2.0.0',
@@ -713,6 +821,7 @@ export const useCloudStore = create<CloudStudioState>()(
             environments,
             nodes,
             edges,
+            ...(scenarios.length ? { scenarios } : {}),
           },
           null,
           2
@@ -723,12 +832,14 @@ export const useCloudStore = create<CloudStudioState>()(
         try {
           const parsed = JSON.parse(jsonText);
           if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return false;
+          const environments = parsed.environments ? resolveEnvironments(parsed.environments) : get().environments;
           get().pushHistory();
           set({
             nodes: normalizeNodes(parsed.nodes),
             edges: parsed.edges,
-            environments: withCurrentEnvironmentColors(parsed.environments) || get().environments,
-            activeEnv: parsed.activeEnv || 'dev',
+            environments,
+            scenarios: Array.isArray(parsed.scenarios) ? parsed.scenarios : [],
+            activeEnv: validActiveEnv(parsed.activeEnv || get().activeEnv, environments),
             selectedNodeId: parsed.nodes[0]?.id || null,
             selectedEdgeId: null,
             isImportModalOpen: false,
@@ -1055,9 +1166,10 @@ export const useCloudStore = create<CloudStudioState>()(
         if (command === 'apply' || command === 'destroy') await get().syncStatusFromState([envId]);
       },
 
-      syncStatusFromState: async (envIds = ENV_ORDER) => {
+      syncStatusFromState: async (requested) => {
         const projectId = get().activeProject?.id;
         if (!projectId) return;
+        const envIds = requested ?? envIdsOf(get().environments);
         await Promise.all(
           envIds.map(async (envId) => {
             try {
@@ -1137,10 +1249,13 @@ export const useCloudStore = create<CloudStudioState>()(
           if (detail.exists && Array.isArray(detail.doc?.nodes) && Array.isArray(detail.doc?.edges)) {
             const doc = detail.doc;
             const nodes = withRuntimeStateFrom(normalizeNodes(doc.nodes), get().nodes);
+            const environments = resolveEnvironments(doc.environments);
             set((state) => ({
               nodes,
               edges: doc.edges,
-              environments: withCurrentEnvironmentColors(doc.environments) || state.environments,
+              environments,
+              scenarios: Array.isArray(doc.scenarios) ? doc.scenarios : [],
+              activeEnv: validActiveEnv(state.activeEnv, environments),
               selectedNodeId: nodes.some((n) => n.id === state.selectedNodeId) ? state.selectedNodeId : null,
               selectedEdgeId: null,
               past: [],
@@ -1151,6 +1266,7 @@ export const useCloudStore = create<CloudStudioState>()(
             set({
               nodes: normalizeNodes(initialTemplate.nodes),
               edges: initialTemplate.edges,
+              scenarios: [],
               selectedNodeId: null,
               selectedEdgeId: null,
               past: [],
@@ -1220,6 +1336,7 @@ export const useCloudStore = create<CloudStudioState>()(
         environments: state.environments,
         nodes: state.nodes,
         edges: state.edges,
+        scenarios: state.scenarios,
         isCatalogOpen: state.isCatalogOpen,
         isDrawerOpen: state.isDrawerOpen,
       }),
@@ -1227,14 +1344,15 @@ export const useCloudStore = create<CloudStudioState>()(
       merge: (persisted, current) => {
         const saved = (persisted || {}) as Partial<CloudStudioState>;
         let nodes = normalizeNodes(saved.nodes ?? current.nodes);
+        const environments = saved.environments ? resolveEnvironments(saved.environments) : current.environments;
         // A reload mid-run leaves nodes stuck in an in-flight state
-        for (const envId of ENV_ORDER) {
+        for (const envId of envIdsOf(environments)) {
           nodes = withProvisioningState(nodes, envId, (_n, state) =>
             state === 'planning' || state === 'provisioning' ? 'unapplied' : undefined
           );
         }
-        const environments = withCurrentEnvironmentColors(saved.environments) || current.environments;
-        return { ...current, ...saved, environments, nodes };
+        const activeEnv = validActiveEnv(saved.activeEnv ?? current.activeEnv, environments);
+        return { ...current, ...saved, environments, activeEnv, nodes };
       },
     }
   )
@@ -1246,7 +1364,8 @@ useCloudStore.subscribe((state, prev) => {
   if (
     state.nodes === prev.nodes &&
     state.edges === prev.edges &&
-    state.environments === prev.environments
+    state.environments === prev.environments &&
+    state.scenarios === prev.scenarios
   ) {
     return;
   }

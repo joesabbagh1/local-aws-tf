@@ -202,7 +202,14 @@ resource "aws_ecs_task_definition" "core_backend_fargate_task" {
         }
       ]
       environment = [
-        { name = "ENVIRONMENT", value = var.environment }
+        { name = "ENVIRONMENT", value = var.environment },
+        { name = "PRIMARY_POSTGRES_DB_HOST", value = tostring(aws_db_instance.primary_postgres_db.address) },
+        { name = "PRIMARY_POSTGRES_DB_PORT", value = tostring(aws_db_instance.primary_postgres_db.port) },
+        { name = "PRIMARY_POSTGRES_DB_NAME", value = tostring(aws_db_instance.primary_postgres_db.db_name) },
+        { name = "PRIMARY_POSTGRES_DB_SECRET_ARN", value = tostring(try(aws_db_instance.primary_postgres_db.master_user_secret[0].secret_arn, "")) },
+        { name = "SESSION_REDIS_CACHE_HOST", value = tostring(aws_elasticache_cluster.session_redis_cache.cache_nodes[0].address) },
+        { name = "SESSION_REDIS_CACHE_PORT", value = tostring(aws_elasticache_cluster.session_redis_cache.port) },
+        { name = "DB_CREDENTIALS_SECRET_SECRET_ARN", value = tostring(aws_secretsmanager_secret.db_credentials_secret.arn) }
       ]
     }
   ])
@@ -222,7 +229,14 @@ resource "aws_ecs_service" "core_backend_fargate" {
     assign_public_ip = false
   }
 
+  load_balancer {
+    target_group_arn = aws_lb_target_group.public_ingress_alb_tg.arn
+    container_name   = "core_backend_fargate"
+    container_port   = 8080
+  }
+
   tags = local.common_tags
+  depends_on = [aws_lb_listener.public_ingress_alb_listener]
 }
 
 resource "aws_db_subnet_group" "primary_postgres_db_subnets" {
@@ -271,6 +285,11 @@ resource "aws_elasticache_cluster" "session_redis_cache" {
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-session_redis_cache"
   })
+
+  # Emulator only: it serves the cache on a port of its own choosing. The AWS export keeps the designed port.
+  lifecycle {
+    ignore_changes = [port]
+  }
 }
 
 resource "aws_secretsmanager_secret" "db_credentials_secret" {
@@ -283,4 +302,34 @@ resource "aws_secretsmanager_secret" "db_credentials_secret" {
 resource "aws_secretsmanager_secret_version" "db_credentials_secret_val" {
   secret_id     = aws_secretsmanager_secret.db_credentials_secret.id
   secret_string = "{\"username\":\"postgres_admin\",\"password\":\"local_dev_password_9297\"}"
+}
+
+# ============================================================================
+# Cross-Service Wiring, Permissions & Event Triggers (Canvas Edges)
+# ============================================================================
+
+resource "aws_iam_role_policy" "core_backend_fargate_db_primary_postgres_db" {
+  name = "core_backend_fargate-db-primary_postgres_db"
+  role = aws_iam_role.core_backend_fargate_task_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = coalescelist(aws_db_instance.primary_postgres_db.master_user_secret[*].secret_arn, ["arn:aws:secretsmanager:*:*:secret:rds!*"])
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "core_backend_fargate_secret_db_credentials_secret" {
+  name = "core_backend_fargate-secret-db_credentials_secret"
+  role = aws_iam_role.core_backend_fargate_task_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+      Resource = [aws_secretsmanager_secret.db_credentials_secret.arn]
+    }]
+  })
 }

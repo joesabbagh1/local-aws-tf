@@ -936,6 +936,8 @@ export const AWS_SERVICES_CATALOG: AwsServiceMetadata[] = [
     iconName: 'Sparkles',
     description: 'Serverless generative AI foundation models, guardrails, and knowledge base integration.',
     terraformResourceType: 'aws_bedrockagent_agent',
+    deprecated:
+      'AWS no longer creates Bedrock Agents for new accounts (the service is in maintenance mode), and the emulator does not run them. Call Claude from a Lambda function instead: set its Claude model field.',
     schema: [
       { key: 'foundation_model', label: 'Foundation Model ID', type: 'select', defaultValue: 'anthropic.claude-3-5-sonnet-20241022-v2:0', group: 'general', envConfigurable: true, options: [
         { label: 'Claude 3.5 Sonnet v2', value: 'anthropic.claude-3-5-sonnet-20241022-v2:0' },

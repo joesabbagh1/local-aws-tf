@@ -5,18 +5,21 @@ import path from 'node:path';
 import https from 'node:https';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { S3Client, ListBucketsCommand, ListObjectsV2Command, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
-import { DynamoDBClient, ListTablesCommand, ScanCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
-import { SQSClient, ListQueuesCommand, SendMessageCommand, ReceiveMessageCommand } from '@aws-sdk/client-sqs';
-import { LambdaClient, ListFunctionsCommand, InvokeCommand } from '@aws-sdk/client-lambda';
-import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { DEFAULT_ENVIRONMENTS, AWS_CATEGORIES, AWS_SERVICES_CATALOG } from '../src/data/awsCatalog';
 import { ARCHITECTURE_TEMPLATES } from '../src/data/templates';
 import type { CloudNode, CloudEdge, EnvironmentId, EnvironmentProfile } from '../src/types/cloud';
 import { buildTerraformFiles } from '../src/utils/terraformBundle';
 import { emulatorSupport } from '../src/utils/emulatorSupport';
+import { EXPLORER_SERVICES } from '../src/utils/explorerOps';
+import { ENV_ID_PATTERN, resolveEnvironments } from '../src/utils/environments';
 import type { ProjectFile } from '../src/utils/projectFile';
+import type { Scenario } from '../src/utils/scenarios';
+import { parseScenario } from '../src/utils/scenarios';
 import { applyDesignOp, opMutates } from './services/designOps';
+import { emulatorDataDir, resolveLiveTarget, runExplorerOperation } from './services/explorer';
+import { liveResourceName } from '../src/utils/terraformNames';
+import { runScenario, scenarioRunLog } from './services/scenarioRunner';
+import { alreadyExisting, blockedDeletes, failedIds, securityGroupEgressQuirks, unimplementedDeletes } from './services/emulatorQuirks';
 import { BusyError, DbReady, createSql, withAdvisoryLock, type Sql } from './db';
 import {
   PROJECT_FILE,
@@ -48,6 +51,31 @@ const OUTPUT_DIRS = { emulator: 'terraform-out', aws: 'terraform-aws' } as const
 const PLAN_FILE = '.localcloud.tfplan';
 /** Hash of what a saved plan was made from, so a stale plan is never applied. */
 const PLAN_INPUTS_FILE = '.localcloud.tfplan.inputs';
+/** Present next to a saved plan made with -destroy, so applying it is known to be a destroy. */
+const PLAN_DESTROY_MARKER = '.localcloud.tfplan.destroy';
+/**
+ * Resources a destroy dropped from Terraform state because the emulator couldn't delete them (or
+ * what they still held). They live on in the emulator until it restarts, so a later destroy knows
+ * what is holding things, and a later apply takes them back with `terraform import`.
+ */
+const LEFT_IN_EMULATOR_FILE = '.localcloud.left-in-emulator.json';
+
+type LeftInEmulator = { address: string; id?: string };
+
+function readLeftInEmulator(envDir: string): LeftInEmulator[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(envDir, LEFT_IN_EMULATOR_FILE), 'utf-8'));
+    return Array.isArray(parsed) ? parsed.filter((e) => e && typeof e.address === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLeftInEmulator(envDir: string, entries: LeftInEmulator[]) {
+  const file = path.join(envDir, LEFT_IN_EMULATOR_FILE);
+  if (entries.length === 0) fs.rmSync(file, { force: true });
+  else fs.writeFileSync(file, `${JSON.stringify(entries, null, 2)}\n`);
+}
 
 /**
  * Everything a plan is made from: the Terraform files and the Lambda zips (whose contents can change
@@ -73,19 +101,9 @@ export function planInputsHash(envDir: string): string {
   return hash.digest('hex');
 }
 
-const ENV_IDS = new Set(['dev', 'testing', 'staging', 'prod']);
 const TERRAFORM_COMMANDS = new Set(['init', 'validate', 'plan', 'apply', 'destroy']);
 
 export type EmulatorHealth = { running: boolean; status: string; caExists: boolean };
-
-/**
- * Where the emulator's per-port credentials and CA live, and the dir mounted into emulator
- * containers. Overridable with LOCALCLOUD_EMULATOR_DIR when the backend itself runs in a
- * container and must share the host's dir at the same absolute path (see docker-compose.yml).
- */
-function emulatorDataDir(): string {
-  return process.env.LOCALCLOUD_EMULATOR_DIR || path.join(os.homedir(), '.aws', 'emulator');
-}
 
 export function checkEmulatorHealth(port: number): Promise<EmulatorHealth> {
   return new Promise((resolve) => {
@@ -148,8 +166,9 @@ function parsePort(value: unknown): number | null {
   return Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : null;
 }
 
+/** Shape check only (it becomes a path segment and a container name); routes check it exists in the project. */
 function parseEnvId(value: unknown): string | null {
-  return typeof value === 'string' && ENV_IDS.has(value) ? value : null;
+  return typeof value === 'string' && ENV_ID_PATTERN.test(value) ? value : null;
 }
 
 /** Runs a binary with an argument list (no shell), so request values can never be interpreted as shell syntax. */
@@ -201,114 +220,6 @@ export function getEmulatorAwsEnv(port: number, region = 'us-east-1'): NodeJS.Pr
   delete env.AWS_PROFILE;
   return env;
 }
-
-/** SDK client config for one emulator port, using the credentials and CA the emulator writes to ~/.aws/emulator/<port>/. */
-function getEmulatorClientConfig(port: number, region: string) {
-  const baseDir = path.join(emulatorDataDir(), String(port));
-  const ini = fs.readFileSync(path.join(baseDir, 'emulator_credentials'), 'utf-8');
-  const read = (key: string) => ini.match(new RegExp(`^\\s*${key}\\s*=\\s*(\\S+)`, 'm'))?.[1] || '';
-  return {
-    region,
-    endpoint: `https://127.0.0.1:${port}`,
-    credentials: {
-      accessKeyId: read('aws_access_key_id'),
-      secretAccessKey: read('aws_secret_access_key'),
-    },
-    disableHostPrefix: true,
-    requestHandler: new NodeHttpHandler({
-      httpsAgent: new https.Agent({ ca: fs.readFileSync(path.join(baseDir, 'ca.pem')) }),
-    }),
-  };
-}
-
-const MAX_PAYLOAD_CHARS = 64 * 1024;
-
-function parseMaybeJson(text: string): unknown {
-  const clipped = text.slice(0, MAX_PAYLOAD_CHARS);
-  try {
-    return JSON.parse(clipped);
-  } catch {
-    return clipped;
-  }
-}
-
-function stripMetadata<T extends object>(output: T): Omit<T, '$metadata'> {
-  const { $metadata: _meta, ...rest } = output as T & { $metadata?: unknown };
-  return rest;
-}
-
-/** Runs one data-plane operation against the emulator. Returns null for unsupported operations. */
-async function runExplorerOperation(
-  port: number,
-  region: string,
-  service: string,
-  operation: string,
-  target: string,
-  input: Record<string, any>
-): Promise<unknown | null> {
-  const config = getEmulatorClientConfig(port, region);
-
-  switch (`${service}:${operation}`) {
-    case 's3:list_buckets':
-      return stripMetadata(await new S3Client({ ...config, forcePathStyle: true }).send(new ListBucketsCommand({})));
-    case 's3:list_objects':
-      return stripMetadata(
-        await new S3Client({ ...config, forcePathStyle: true }).send(
-          new ListObjectsV2Command({ Bucket: target, MaxKeys: 100 })
-        )
-      );
-    case 's3:put_object':
-      return stripMetadata(
-        await new S3Client({ ...config, forcePathStyle: true }).send(
-          new PutObjectCommand({ Bucket: target, Key: String(input.key || ''), Body: String(input.body ?? '') })
-        )
-      );
-    case 's3:get_object': {
-      const out = await new S3Client({ ...config, forcePathStyle: true }).send(
-        new GetObjectCommand({ Bucket: target, Key: String(input.key || '') })
-      );
-      const { Body, ...meta } = stripMetadata(out);
-      return { ...meta, Payload: parseMaybeJson((await Body?.transformToString()) || '') };
-    }
-    case 'dynamodb:list_tables':
-      return stripMetadata(await new DynamoDBClient(config).send(new ListTablesCommand({})));
-    case 'dynamodb:scan':
-      return stripMetadata(await new DynamoDBClient(config).send(new ScanCommand({ TableName: target, Limit: 50 })));
-    case 'dynamodb:put_item':
-      return stripMetadata(
-        await new DynamoDBClient(config).send(new PutItemCommand({ TableName: target, Item: input.item || {} }))
-      );
-    case 'sqs:list_queues':
-      return stripMetadata(await new SQSClient(config).send(new ListQueuesCommand({})));
-    case 'sqs:send_message':
-      return stripMetadata(
-        await new SQSClient(config).send(
-          new SendMessageCommand({ QueueUrl: target, MessageBody: String(input.body ?? '') })
-        )
-      );
-    case 'sqs:receive_message':
-      return stripMetadata(
-        await new SQSClient(config).send(
-          new ReceiveMessageCommand({ QueueUrl: target, MaxNumberOfMessages: 10, WaitTimeSeconds: 1 })
-        )
-      );
-    case 'lambda:list_functions':
-      return stripMetadata(await new LambdaClient(config).send(new ListFunctionsCommand({})));
-    case 'lambda:invoke': {
-      const out = await new LambdaClient(config).send(
-        new InvokeCommand({
-          FunctionName: target,
-          Payload: Buffer.from(JSON.stringify(input.event ?? {})),
-        })
-      );
-      const { Payload, ...meta } = stripMetadata(out);
-      return { ...meta, Payload: parseMaybeJson(Buffer.from(Payload || []).toString('utf-8')) };
-    }
-    default:
-      return null;
-  }
-}
-
 
 export interface LambdaArtifactRequest {
   envId: string;
@@ -466,22 +377,8 @@ export async function stopEmulatorContainer(containerName: string) {
   return runCommand('docker', ['rm', '-f', containerName]);
 }
 
-/**
- * Known emulator gap (aws/aws-emulator#46): the emulator stores a VPC security group's default egress
- * rule without ports, so the provider's request to remove it (ports 0-0) doesn't match, and Terraform
- * marks the (existing) group tainted.
- * Returns the addresses of groups that failed only for that reason, from plain-text apply output.
- */
-export function securityGroupEgressQuirks(applyOutput: string): string[] {
-  const addresses = new Set<string>();
-  for (const chunk of applyOutput.split(/(?=Error: )/)) {
-    if (!/^Error: revoking default IPv[46] egress rule for Security Group/.test(chunk)) continue;
-    if (!/InvalidPermission\.NotFound/.test(chunk)) continue;
-    const addr = /\bwith (aws_security_group\.[A-Za-z0-9_-]+)/.exec(chunk)?.[1];
-    if (addr) addresses.add(addr);
-  }
-  return [...addresses];
-}
+// Re-exported for tests and scripts that import it from here
+export { securityGroupEgressQuirks };
 
 const LOCAL_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -533,6 +430,36 @@ async function readPlanChanges(envDir: string, env: NodeJS.ProcessEnv): Promise<
   } catch {
     return null;
   }
+}
+
+/** `?limit=` for list routes, clamped so a client can't ask for the whole table. */
+function parseLimit(url: URL, fallback: number, max = 500): number {
+  const limit = Number(url.searchParams.get('limit'));
+  return Number.isInteger(limit) && limit > 0 ? Math.min(limit, max) : fallback;
+}
+
+/** postgres.js hands jsonb back as a string when it was written through an explicit ::jsonb cast. */
+function parseJsonColumn(value: unknown): unknown {
+  if (typeof value !== 'string') return value ?? null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/** Terraform-style totals for a saved plan: a replace counts as one add and one destroy. */
+function planCounts(planJson: unknown): { add: number; change: number; destroy: number } | null {
+  const changes = parseJsonColumn(planJson);
+  if (!Array.isArray(changes)) return null;
+  const counts = { add: 0, change: 0, destroy: 0 };
+  for (const change of changes as PlanResourceChange[]) {
+    const actions = Array.isArray(change?.actions) ? change.actions : [];
+    if (actions.includes('create')) counts.add++;
+    if (actions.includes('delete')) counts.destroy++;
+    if (actions.includes('update')) counts.change++;
+  }
+  return counts;
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<unknown> | unknown;
@@ -611,14 +538,8 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
   };
 
   /** The project file strips presentation-only profile fields; re-merge the app defaults over the saved ones. */
-  function mergeEnvironments(envs: ProjectFile['environments'] | undefined): Record<EnvironmentId, EnvironmentProfile> {
-    const out = {} as Record<EnvironmentId, EnvironmentProfile>;
-    for (const id of Object.keys(DEFAULT_ENVIRONMENTS) as EnvironmentId[]) {
-      const saved = (envs as Record<string, unknown> | null)?.[id];
-      out[id] = { ...DEFAULT_ENVIRONMENTS[id], ...(saved && typeof saved === 'object' ? saved : {}) } as EnvironmentProfile;
-    }
-    return out;
-  }
+  const mergeEnvironments = (envs: ProjectFile['environments'] | undefined): Record<EnvironmentId, EnvironmentProfile> =>
+    resolveEnvironments(envs);
 
   /** Write a compiled bundle into a working dir: .tf files, emulator scripts, deterministic Lambda zips. */
   async function writeTerraformOutput(
@@ -668,7 +589,7 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
   const exactRoutes: Record<string, Handler> = {
     // 1. Live health status for all environment ports
     '/api/emulator/status': async (_req, res, url) => {
-      const ports = (url.searchParams.get('ports') || '9297,9298,9299,9300')
+      const ports = (url.searchParams.get('ports') || Object.values(DEFAULT_ENVIRONMENTS).map((e) => e.emulatorPort).join(','))
         .split(',')
         .map(parsePort)
         .filter((p): p is number => p !== null);
@@ -712,6 +633,8 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
                 error: r.error,
               }));
 
+        // A fresh emulator holds nothing an earlier destroy had to leave behind
+        if (action === 'start' && result.ok) writeLeftInEmulator(path.join(workDir, 'environments', envId), []);
         if (sql && result.ok && typeof body.projectId === 'string' && body.projectId) {
           await recordEvent(sql, body.projectId, actorOf(body), `emulator.${action}`, { envId, port }).catch(() => {});
         }
@@ -727,9 +650,29 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
 
       try {
         const body = await readJsonBody(req);
-        const port = parsePort(body.port);
-        const region = /^[a-z]{2}(-[a-z]+)+-\d$/.test(String(body.region)) ? String(body.region) : 'us-east-1';
+        let port = parsePort(body.port);
+        let region = /^[a-z]{2}(-[a-z]+)+-\d$/.test(String(body.region)) ? String(body.region) : 'us-east-1';
+        let target = String(body.target || '');
         const input: Record<string, any> = body.input && typeof body.input === 'object' ? body.input : {};
+
+        // With a project and environment the backend looks up the emulator itself, and `nodeId`
+        // names a canvas resource instead of a live name, URL or ARN
+        let liveName = '';
+        if (typeof body.projectId === 'string' && body.projectId && sql && dbReady) {
+          await dbReady.once();
+          const head = await getHead(sql, body.projectId);
+          const environments = mergeEnvironments(head?.doc.environments);
+          const envId = parseEnvId(body.envId) ?? Object.keys(environments)[0];
+          const env = environments[envId];
+          if (!env) return sendJson(res, { ok: false, error: `Unknown environment ${body.envId}` }, 400);
+          port = env.emulatorPort;
+          region = env.region;
+          if (typeof body.nodeId === 'string' && body.nodeId) {
+            const node = (head?.doc.nodes as CloudNode[] | undefined)?.find((n) => n.id === body.nodeId);
+            if (!node) return sendJson(res, { ok: false, error: `Resource ${body.nodeId} not found` }, 404);
+            liveName = liveResourceName(node, envId);
+          }
+        }
         if (!port) return sendJson(res, { ok: false, error: 'Invalid port' }, 400);
 
         const health = await checkEmulatorHealth(port);
@@ -741,12 +684,20 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
           });
         }
 
+        if (liveName) {
+          const resolved = await resolveLiveTarget(port, region, String(body.service || ''), liveName);
+          if (!resolved) {
+            return sendJson(res, { ok: false, emulatorOnline: true, error: `${liveName} is not deployed in this environment. Apply first.` });
+          }
+          target = resolved;
+        }
+
         const data = await runExplorerOperation(
           port,
           region,
           String(body.service || ''),
           String(body.operation || ''),
-          String(body.target || ''),
+          target,
           input
         );
         if (data === null) {
@@ -853,11 +804,11 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
     sendJson(res, { ok: true, version: result.version, noop: result.noop, file: PROJECT_FILE });
   });
 
-  on('GET', '/api/projects/:id/versions', async (_req, res, _url, params) => {
+  on('GET', '/api/projects/:id/versions', async (_req, res, url, params) => {
     const db = requireDb();
     await dbReady!.once();
     await requireProject(db, params.id);
-    sendJson(res, { ok: true, versions: await listVersions(db, params.id) });
+    sendJson(res, { ok: true, versions: await listVersions(db, params.id, parseLimit(url, 50)) });
   });
 
   on('GET', '/api/projects/:id/versions/:version', async (_req, res, _url, params) => {
@@ -968,9 +919,11 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
 
     try {
       await withAdvisoryLock(db, `${project.id}:tf:${envId}`, async () => {
+        // The design version the Terraform on disk came from, so history can tie a run to a change
+        const docVersion = (await getHead(db, project.id))?.version ?? null;
         const [run] = await db`
-          INSERT INTO runs (project_id, env, command, status, actor)
-          VALUES (${project.id}, ${envId}, ${command}, 'running', ${actor})
+          INSERT INTO runs (project_id, env, command, status, actor, doc_version)
+          VALUES (${project.id}, ${envId}, ${command === 'plan' && body.destroy === true ? 'plan -destroy' : command}, 'running', ${actor}, ${docVersion})
           RETURNING id
         `;
         const runId = Number(run.id);
@@ -989,12 +942,16 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
 
         const planPath = path.join(envDir, PLAN_FILE);
         const planInputsPath = path.join(envDir, PLAN_INPUTS_FILE);
+        const planDestroyPath = path.join(envDir, PLAN_DESTROY_MARKER);
         const discardPlan = () => {
           fs.rmSync(planPath, { force: true });
           fs.rmSync(planInputsPath, { force: true });
+          fs.rmSync(planDestroyPath, { force: true });
         };
         // Applying the saved plan runs exactly what was reviewed on the canvas
         const applySavedPlan = command === 'apply' && body.usePlan === true && fs.existsSync(planPath);
+        // A destroy, or applying a reviewed destroy plan: everything in state is meant to go
+        const destroying = command === 'destroy' || (applySavedPlan && fs.existsSync(planDestroyPath));
         if (command !== 'apply' || !applySavedPlan) discardPlan();
 
         // The canvas can't see inside Lambda code folders; refuse a plan whose inputs changed since review
@@ -1039,19 +996,16 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
           active?.kill('SIGINT');
         });
 
-        let applyOutput = '';
-        for (const args of steps) {
-          if (aborted) {
-            await finishRun('aborted', 130);
-            return;
-          }
+        /** Runs one terraform command, streaming its output; resolves to its exit code and output. */
+        const runStep = async (args: string[]): Promise<{ code: number; output: string }> => {
           tee(`$ terraform ${args.join(' ')}\n`);
+          let output = '';
           const code = await new Promise<number>((resolve) => {
             const child = spawn('terraform', args, { cwd: envDir, env: awsEnv });
             active = child;
             const forward = (chunk: Buffer) => {
               tee(chunk);
-              if (args[0] === 'apply') applyOutput += chunk.toString();
+              output += chunk.toString();
             };
             child.stdout.on('data', forward);
             child.stderr.on('data', forward);
@@ -1062,19 +1016,118 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
             child.on('close', (c) => resolve(c ?? 1));
           });
           active = null;
-          if (code !== 0) {
-            if (command === 'apply') {
-              discardPlan();
-              const quirks = securityGroupEgressQuirks(applyOutput);
-              for (const addr of quirks) {
-                const untainted = await runCommand('terraform', ['untaint', '-no-color', addr], { cwd: envDir, env: awsEnv });
-                tee(
-                  untainted.ok
-                    ? `\nNote: ${addr} exists, but an emulator bug (aws/aws-emulator#46) made Terraform mark it failed. LocalCloud marked it usable again. Apply again to create the rest.\n`
-                    : `\nCould not untaint ${addr}: ${untainted.stderr.trim()}\n`
-                );
+          return { code, output };
+        };
+
+        /**
+         * After a failed apply or destroy, works around the emulator gaps LocalCloud knows, then
+         * finishes the job with one more run. Returns the new exit code, or null when nothing applied.
+         * The progress lines it prints use Terraform's wording so the canvas updates those resources.
+         */
+        const recover = async (output: string): Promise<number | null> => {
+          if (aborted) return null;
+          if (destroying) {
+            const leftovers = unimplementedDeletes(output);
+            // Left behind by an earlier destroy: then what fails as "in use" is held by those
+            const earlier = readLeftInEmulator(envDir);
+            const held = earlier.length > 0 ? blockedDeletes(output) : [];
+            if (leftovers.length === 0 && held.length === 0) return null;
+
+            const forget = async (entry: LeftInEmulator, why: string) => {
+              const removed = await runCommand('terraform', ['state', 'rm', '-no-color', entry.address], { cwd: envDir, env: awsEnv });
+              if (!removed.ok) {
+                tee(`\nCould not remove ${entry.address} from state: ${removed.stderr.trim()}\n`);
+                return false;
+              }
+              tee(`\n${entry.address}: Destruction complete (removed from Terraform state: ${why}; restarting the emulator clears it)\n`);
+              const left = readLeftInEmulator(envDir).filter((e) => e.address !== entry.address);
+              writeLeftInEmulator(envDir, [...left, { address: entry.address, ...(entry.id ? { id: entry.id } : {}) }]);
+              return true;
+            };
+            for (const leftover of leftovers) {
+              if (!(await forget(leftover, `the emulator has no ${leftover.operation}, aws/aws-emulator#355`))) return null;
+            }
+            const stuck = [...earlier, ...leftovers].map((l) => l.address).join(', ');
+            const inUse = `still in use by ${stuck}, which the emulator can't delete`;
+            for (const entry of held) {
+              if (!(await forget(entry, inUse))) return null;
+            }
+            // What the undeletable resources still use can't be deleted either (a subnet group, then its subnets and VPC)
+            let code = 1;
+            for (let round = 0; round < 5 && !aborted; round++) {
+              tee('\nLocalCloud is destroying the rest.\n');
+              const step = await runStep(['destroy', varFile, '-auto-approve', '-no-color', '-input=false']);
+              code = step.code;
+              if (code === 0) break;
+              const next = [...unimplementedDeletes(step.output), ...blockedDeletes(step.output)];
+              if (next.length === 0) break;
+              for (const entry of next) {
+                if (!(await forget(entry, inUse))) return code;
               }
             }
+            return code;
+          }
+          if (command === 'apply') {
+            let out = output;
+            let code: number | null = null;
+            const adoptedIds = new Set<string>();
+            let settled = false;
+            for (let round = 0; round < 5 && !aborted; round++) {
+              const tainted = securityGroupEgressQuirks(out);
+              // Left in the emulator by an earlier destroy, under the same id: take it back instead of failing
+              const left = readLeftInEmulator(envDir);
+              const existing = alreadyExisting(out);
+              const adopt = left.filter((e) => e.id && existing.includes(e.id));
+              if (tainted.length === 0 && adopt.length === 0) {
+                // The first update of a resource taken back can fail on arguments import can't read (the provider
+                // re-sends a Redis auth token strategy the emulator rejects); the state is right after it, so once more
+                const failed = failedIds(out);
+                if (settled || adoptedIds.size === 0 || failed.length === 0 || !failed.every((id) => adoptedIds.has(id))) return code;
+                settled = true;
+              }
+
+              for (const address of tainted) {
+                const untainted = await runCommand('terraform', ['untaint', '-no-color', address], { cwd: envDir, env: awsEnv });
+                if (!untainted.ok) {
+                  tee(`\nCould not untaint ${address}: ${untainted.stderr.trim()}\n`);
+                  return code;
+                }
+                tee(`\n${address}: Creation complete (an emulator bug, aws/aws-emulator#46, made Terraform mark it failed; LocalCloud marked it usable)\n`);
+              }
+              for (const entry of adopt) {
+                const imported = await runCommand('terraform', ['import', varFile, '-no-color', '-input=false', entry.address, entry.id!], { cwd: envDir, env: awsEnv });
+                if (!imported.ok) {
+                  tee(`\nCould not take ${entry.address} back from the emulator: ${imported.stderr.trim()}\n`);
+                  return code;
+                }
+                writeLeftInEmulator(envDir, readLeftInEmulator(envDir).filter((e) => e.address !== entry.address));
+                adoptedIds.add(entry.id!);
+                tee(`\n${entry.address}: Creation complete (taken back from the emulator, where an earlier destroy had to leave it)\n`);
+              }
+              // Same Terraform files as the reviewed plan (checked above), so this only does what the first pass couldn't
+              tee('\nLocalCloud is applying again to finish the rest.\n');
+              const step = await runStep(['apply', varFile, '-auto-approve', '-no-color', '-input=false']);
+              code = step.code;
+              out = step.output;
+              if (code === 0) return 0;
+            }
+            return code;
+          }
+          return null;
+        };
+
+        for (const args of steps) {
+          if (aborted) {
+            await finishRun('aborted', 130);
+            return;
+          }
+          const step = await runStep(args);
+          let code = step.code;
+          if (code !== 0 && (args[0] === 'apply' || args[0] === 'destroy')) {
+            discardPlan();
+            code = (await recover(step.output)) ?? code;
+          }
+          if (code !== 0) {
             await finishRun('failed', code);
             return finish(code);
           }
@@ -1083,6 +1136,7 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
         let planChanges: PlanResourceChange[] | null = null;
         if (command === 'plan') {
           fs.writeFileSync(planInputsPath, planInputsHash(envDir));
+          if (body.destroy === true) fs.writeFileSync(planDestroyPath, '');
           planChanges = await readPlanChanges(envDir, awsEnv);
           if (planChanges) res.write(`\n__LC_PLAN__:${JSON.stringify(planChanges)}\n`);
         }
@@ -1134,6 +1188,117 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
     }
   });
 
+  // What ran against this project's environments: terraform commands and scenario runs, newest first.
+  on('GET', '/api/projects/:id/runs', async (_req, res, url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    await requireProject(db, params.id);
+    const envId = parseEnvId(url.searchParams.get('env'));
+    const rows = await db`
+      SELECT id, env, command, status, exit_code, actor, doc_version, plan_json, started_at, finished_at
+      FROM runs
+      WHERE project_id = ${params.id} ${envId ? db`AND env = ${envId}` : db``}
+      ORDER BY id DESC LIMIT ${parseLimit(url, 50)}
+    `;
+    sendJson(res, {
+      ok: true,
+      runs: rows.map(({ plan_json, ...run }) => ({ ...run, id: Number(run.id), doc_version: run.doc_version === null ? null : Number(run.doc_version), plan: planCounts(plan_json) })),
+    });
+  });
+
+  // One run with its full output (and, for a plan, the resource changes).
+  on('GET', '/api/projects/:id/runs/:runId', async (_req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    await requireProject(db, params.id);
+    const runId = Number(params.runId);
+    if (!Number.isInteger(runId) || runId < 1) throw new HttpError(400, 'Invalid run id');
+    const [row] = await db`
+      SELECT id, env, command, status, exit_code, actor, doc_version, plan_json, log, started_at, finished_at
+      FROM runs WHERE project_id = ${params.id} AND id = ${runId}
+    `;
+    if (!row) throw new HttpError(404, `Run ${runId} not found`);
+    const { plan_json, ...run } = row;
+    sendJson(res, {
+      ok: true,
+      run: {
+        ...run,
+        id: Number(run.id),
+        doc_version: run.doc_version === null ? null : Number(run.doc_version),
+        plan: planCounts(plan_json),
+        planChanges: parseJsonColumn(plan_json),
+      },
+    });
+  });
+
+  // The audit trail: who did what (design operations, syncs, emulator control, restores, scenario runs).
+  on('GET', '/api/projects/:id/events', async (_req, res, url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    await requireProject(db, params.id);
+    const rows = await db`
+      SELECT id, actor, action, payload, doc_version, created_at FROM events
+      WHERE project_id = ${params.id} ORDER BY id DESC LIMIT ${parseLimit(url, 100)}
+    `;
+    sendJson(res, {
+      ok: true,
+      events: rows.map((e) => ({ ...e, id: Number(e.id), doc_version: e.doc_version === null ? null : Number(e.doc_version), payload: parseJsonColumn(e.payload) })),
+    });
+  });
+
+  // Runs saved scenarios (or one given in the body) against an environment's emulator and records
+  // the outcome as a run. body: { envId, scenarioId?, scenario? }
+  on('POST', '/api/projects/:id/scenarios/run', async (req, res, _url, params) => {
+    const db = requireDb();
+    await dbReady!.once();
+    const project = await requireProject(db, params.id);
+    const body = await readJsonBody(req);
+    const head = await getHead(db, project.id);
+    if (!head) throw new HttpError(409, 'The project has no design yet.');
+
+    const environments = mergeEnvironments(head.doc.environments);
+    const envId = parseEnvId(body.envId) ?? Object.keys(environments)[0];
+    const env = environments[envId];
+    if (!env) throw new HttpError(400, `Unknown environment ${body.envId}. This project has: ${Object.keys(environments).join(', ')}`);
+
+    let scenarios: Scenario[];
+    if (body.scenario !== undefined) {
+      const parsed = parseScenario(body.scenario, () => `adhoc-${Date.now().toString(36)}`);
+      if ('error' in parsed) throw new HttpError(400, parsed.error);
+      scenarios = [parsed.scenario];
+    } else {
+      const saved = head.doc.scenarios ?? [];
+      scenarios = typeof body.scenarioId === 'string' ? saved.filter((sc) => sc.id === body.scenarioId || sc.name === body.scenarioId) : saved;
+      if (scenarios.length === 0) {
+        throw new HttpError(404, typeof body.scenarioId === 'string' ? `Scenario ${body.scenarioId} not found` : 'This project has no scenarios yet.');
+      }
+    }
+
+    const health = await checkEmulatorHealth(env.emulatorPort);
+    if (!health.running) {
+      throw new HttpError(409, `The ${envId} emulator is not running on port ${env.emulatorPort}. Start it and apply first.`);
+    }
+
+    const target = { envId, port: env.emulatorPort, region: env.region, nodes: head.doc.nodes as CloudNode[] };
+    const results = [];
+    for (const scenario of scenarios) results.push(await runScenario(scenario, target));
+    const ok = results.every((r) => r.ok);
+    const actor = actorOf(body);
+
+    const [run] = await db`
+      INSERT INTO runs (project_id, env, command, status, exit_code, actor, doc_version, log, finished_at)
+      VALUES (${project.id}, ${envId}, 'scenario', ${ok ? 'succeeded' : 'failed'}, ${ok ? 0 : 1}, ${actor}, ${head.version},
+              ${scenarioRunLog(results, scenarios)}, now())
+      RETURNING id
+    `;
+    await recordEvent(db, project.id, actor, 'scenario.run', {
+      envId,
+      passed: results.filter((r) => r.ok).map((r) => r.name),
+      failed: results.filter((r) => !r.ok).map((r) => r.name),
+    }).catch(() => {});
+    sendJson(res, { ok, envId, runId: Number(run.id), results });
+  });
+
   // One headless design mutation: load head, apply the op (canvas rules enforced), save as a new
   // version. The MCP server's design tools and any programmatic client use exactly this path.
   on('POST', '/api/projects/:id/ops', async (req, res, _url, params) => {
@@ -1145,7 +1310,7 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
     if (!op) throw new HttpError(400, 'op is required');
 
     // These ops can start a design from nothing; everything else needs an existing one
-    const SEED_OPS = new Set(['resource.add', 'template.apply', 'import.terraform']);
+    const SEED_OPS = new Set(['resource.add', 'template.apply', 'import.terraform', 'environment.add']);
     const head = await getHead(db, project.id);
     if (!head && !SEED_OPS.has(op)) {
       throw new HttpError(409, 'The project has no design yet. Start with template_apply, import_terraform or resource_add.');
@@ -1177,6 +1342,12 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
       ok: true,
       categories: AWS_CATEGORIES,
       templates: ARCHITECTURE_TEMPLATES.map((t) => ({ id: t.id, name: t.name, subtitle: t.subtitle, description: t.description })),
+      // What `explore` and scenario steps can do, per service
+      explorer: EXPLORER_SERVICES.map((svc) => ({
+        service: svc.id,
+        resourceType: svc.nodeType,
+        operations: svc.operations.map((op) => ({ operation: op.id, inputs: op.inputs.map((i) => i.key), reads: op.reads ?? false })),
+      })),
       services: AWS_SERVICES_CATALOG.map((svc) => ({
         typeId: svc.typeId,
         name: svc.name,
@@ -1186,6 +1357,7 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
         terraformResourceType: svc.terraformResourceType,
         isContainer: svc.isContainer ?? false,
         emulatorSupport: emulatorSupport(svc).level,
+        ...(svc.deprecated ? { deprecated: svc.deprecated } : {}),
         fields: svc.schema.map((f) => ({
           key: f.key,
           label: f.label,

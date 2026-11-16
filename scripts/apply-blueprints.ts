@@ -19,6 +19,7 @@ import { ARCHITECTURE_TEMPLATES } from '../src/data/templates';
 import { AWS_SERVICES_CATALOG, DEFAULT_ENVIRONMENTS, getDefaultConfigForService } from '../src/data/awsCatalog';
 import { compileTerraformForEnvironment, resolveNodeConfigForEnv, sanitizeIdentifier } from '../src/utils/terraformCompiler';
 import { normalizeNodes } from '../src/utils/canvasLayout';
+import { checkConnection } from '../src/utils/connectionRules';
 import type { CloudEdge, CloudNode, EnvironmentId } from '../src/types/cloud';
 import {
   buildLambdaArtifact,
@@ -28,6 +29,8 @@ import {
   startEmulatorContainer,
   stopEmulatorContainer,
 } from '../server/api';
+import { blockedDeletes, isSecurityGroupEgressQuirk, unimplementedDeletes } from '../server/services/emulatorQuirks';
+import { EMULATOR_ADJUSTMENTS } from '../src/utils/emulatorAdjustments';
 
 const repoRoot = process.cwd();
 const RESULTS_FILE = path.join(repoRoot, 'src', 'data', 'emulatorSupport.json');
@@ -75,10 +78,69 @@ function coverageCanvas(): { id: string; nodes: CloudNode[]; edges: CloudEdge[] 
       subnet.data.envOverrides[envId] = { availability_zone: az };
     }
   }
-  const rest = AWS_SERVICES_CATALOG.filter((svc) => !covered.has(svc.typeId) && !['aws_vpc', 'aws_subnet'].includes(svc.typeId)).map(
+  const rest = AWS_SERVICES_CATALOG.filter((svc) => !svc.deprecated && !covered.has(svc.typeId) && !['aws_vpc', 'aws_subnet'].includes(svc.typeId)).map(
     (svc) => node(svc.typeId, `cov_${svc.typeId.replace(/^aws_/, '')}`)
   );
   return { id: 'catalog-coverage', nodes: [...network, ...rest], edges: [] };
+}
+
+/**
+ * The event and permission wiring connections generate: one function reached from every kind of
+ * entry point (API, queue, topic, bus, bucket, table stream, state machine, load balancer, CDN,
+ * user pool), and calling a table, bucket, queue, topic and secret. Built through the canvas
+ * rules, so every connection here is one a user can draw.
+ */
+function connectionsCanvas(): { id: string; nodes: CloudNode[]; edges: CloudEdge[] } {
+  const node = (typeId: string, name: string, config: Record<string, unknown> = {}, extra: Partial<CloudNode['data']> = {}): CloudNode => ({
+    id: `con-${name}`,
+    type: 'awsNode',
+    position: { x: 0, y: 0 },
+    data: {
+      label: name,
+      resourceName: name,
+      serviceType: typeId,
+      baseConfig: { ...getDefaultConfigForService(typeId), ...config },
+      envOverrides: {},
+      envEnabled: {},
+      tags: {},
+      ...extra,
+    },
+  });
+  const fn = node('aws_lambda_function', 'con_fn', {}, { inlineCode: 'export const handler = async (event) => ({ statusCode: 200, body: JSON.stringify(event).slice(0, 200) });\n' });
+  const sources = [
+    node('aws_apigatewayv2_api', 'con_api'),
+    node('aws_sqs_queue', 'con_in_queue'),
+    node('aws_sns_topic', 'con_topic'),
+    node('aws_cloudwatch_event_bus', 'con_bus'),
+    node('aws_s3_bucket', 'con_uploads', { bucket_prefix: 'con-uploads' }),
+    node('aws_dynamodb_table', 'con_stream_table'),
+    node('aws_sfn_state_machine', 'con_flow'),
+    node('aws_cloudfront_distribution', 'con_cdn'),
+  ];
+  const targets = [
+    node('aws_dynamodb_table', 'con_table'),
+    node('aws_s3_bucket', 'con_media', { bucket_prefix: 'con-media' }),
+    node('aws_sqs_queue', 'con_out_queue'),
+    node('aws_sns_topic', 'con_alerts'),
+    node('aws_secretsmanager_secret', 'con_secret'),
+  ];
+  const pool = node('aws_cognito_user_pool', 'con_users');
+  const fanout = node('aws_sqs_queue', 'con_fanout');
+  const pairs: [CloudNode, CloudNode][] = [
+    ...sources.map((s): [CloudNode, CloudNode] => [s, fn]),
+    ...targets.map((t): [CloudNode, CloudNode] => [fn, t]),
+    [pool, sources[0]],
+    [pool, fn],
+    [sources[2], fanout],
+    [sources[3], fanout],
+  ];
+  const edges: CloudEdge[] = [];
+  for (const [source, target] of pairs) {
+    const check = checkConnection(source, target, edges);
+    if (!check.ok) throw new Error(`connections canvas: ${source.id} -> ${target.id} refused: ${check.reason}`);
+    edges.push({ id: `e-${source.id}-${target.id}`, source: source.id, target: target.id, data: { relationshipType: check.relationshipType, label: check.label } });
+  }
+  return { id: 'connections', nodes: [fn, ...sources, ...targets, pool, fanout], edges };
 }
 
 interface ResourceResult {
@@ -89,6 +151,21 @@ interface ResourceResult {
   destroyError?: string;
   /** Destroy refused because the config asks for it (deletion protection); not a failure. */
   destroyBlocked?: string;
+  /** The emulator can't delete it; LocalCloud dropped it from state, as the app's runner does. */
+  destroyWorkaround?: string;
+  /** The emulator run used a different value than the AWS export (see src/utils/emulatorAdjustments.ts). */
+  adjusted?: boolean;
+}
+
+/** `type.name` of every resource block the compiler marked with an "# Emulator only:" adjustment. */
+function adjustedResources(mainTf: string): Set<string> {
+  const out = new Set<string>();
+  const blocks = mainTf.split(/\n(?=resource ")/);
+  for (const block of blocks) {
+    const head = block.match(/^resource "([\w-]+)" "([\w-]+)"/);
+    if (head && block.includes('# Emulator only:')) out.add(`${head[1]}.${head[2]}`);
+  }
+  return out;
 }
 
 /** Streams `terraform <args> -json`, collecting per-resource outcomes and error diagnostics. */
@@ -144,9 +221,6 @@ const UPSTREAM_ISSUES: Record<string, number> = {
 const SECURITY_GROUP_QUIRK_NOTE =
   "The emulator stores a VPC security group's default egress rule without ports, so the provider's request to remove it (ports 0-0) doesn't match (aws/aws-emulator#46). The group is created; LocalCloud marks it usable, and applying again finishes the rest.";
 
-function isSecurityGroupEgressQuirk(message: string) {
-  return /revoking default IPv[46] egress rule for Security Group/.test(message) && /InvalidPermission\.NotFound/.test(message);
-}
 
 async function waitForEmulator(port: number, timeoutMs = 120000) {
   const credentials = path.join(os.homedir(), '.aws', 'emulator', String(port), 'emulator_credentials');
@@ -202,7 +276,18 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
       TF_IN_AUTOMATION: '1',
     };
     fs.mkdirSync(tfEnv.TF_PLUGIN_CACHE_DIR!, { recursive: true });
-    execFileSync('terraform', ['init', '-input=false', '-no-color'], { cwd: workDir, env: tfEnv, stdio: 'ignore' });
+    // init downloads from the Terraform registry; retry a network blip instead of losing the canvas
+    for (let attempt = 1; ; attempt++) {
+      try {
+        execFileSync('terraform', ['init', '-input=false', '-no-color'], { cwd: workDir, env: tfEnv, stdio: ['ignore', 'pipe', 'pipe'], timeout: 5 * 60 * 1000 });
+        break;
+      } catch (err: any) {
+        const reason = (String(err.stderr || '') || String(err.message)).trim().split('\n').filter(Boolean).slice(-3).join(' ');
+        if (attempt >= 3) throw new Error(`terraform init failed: ${reason}`);
+        log(`terraform init failed (attempt ${attempt}): ${reason}; retrying`);
+        await new Promise((r) => setTimeout(r, 15000 * attempt));
+      }
+    }
 
     // Which resources this canvas declares (counts and helpers included)
     const planned = new Map<string, string>();
@@ -253,29 +338,63 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
       apply.code = second.code;
     }
 
+    const adjusted = adjustedResources(compiled.mainTf);
     const results: ResourceResult[] = [...planned].map(([address, type]) => ({
       address,
       type,
       applied: apply.completed.has(address),
       error: apply.errors.get(address)?.slice(0, 400),
+      ...(adjusted.has(address.replace(/\[[^\]]*\]$/, '')) ? { adjusted: true } : {}),
     }));
 
     if (!keep) {
-      const destroy = await runTerraformJson(workDir, ['destroy', '-auto-approve', '-input=false', `-var-file=${envId}.tfvars`], tfEnv, 20 * 60 * 1000);
+      const runDestroy = async () => {
+        const destroy = await runTerraformJson(workDir, ['destroy', '-auto-approve', '-input=false', `-var-file=${envId}.tfvars`], tfEnv, 20 * 60 * 1000);
+        // Destroy diagnostics often come without an address: match them to resources by AWS name,
+        // and a single leftover message to a single leftover resource
+        const unexplained = [...destroy.errors].filter(([, msg]) => msg === 'apply errored').map(([addr]) => addr);
+        const messages = [...destroy.general];
+        for (const addr of [...unexplained]) {
+          const idx = messages.findIndex((m) => (awsNames.get(addr) || []).some((n) => m.includes(n)));
+          if (idx === -1) continue;
+          destroy.errors.set(addr, messages[idx].replace(/\s+/g, ' '));
+          messages.splice(idx, 1);
+          unexplained.splice(unexplained.indexOf(addr), 1);
+        }
+        if (unexplained.length === 1 && messages.length === 1) {
+          destroy.errors.set(unexplained[0], messages[0].replace(/\s+/g, ' '));
+          messages.length = 0;
+        }
+        return { destroy, messages };
+      };
+
+      let { destroy, messages } = await runDestroy();
       log(`destroy exit ${destroy.code}`);
-      // Destroy diagnostics often come without an address: match them to resources by AWS name,
-      // and a single leftover message to a single leftover resource
-      const unexplained = [...destroy.errors].filter(([, msg]) => msg === 'apply errored').map(([addr]) => addr);
-      const messages = [...destroy.general];
-      for (const addr of [...unexplained]) {
-        const idx = messages.findIndex((m) => (awsNames.get(addr) || []).some((n) => m.includes(n)));
-        if (idx === -1) continue;
-        destroy.errors.set(addr, messages[idx].replace(/\s+/g, ' '));
-        messages.splice(idx, 1);
-        unexplained.splice(unexplained.indexOf(addr), 1);
+
+      // Known emulator gap: some deletes aren't implemented (aws/aws-emulator#355). Do what the app's runner does:
+      // drop those resources from state, then whatever they still hold (a subnet group, its subnets), and destroy the rest.
+      const asOutput = (errors: Map<string, string>) => [...errors].map(([address, msg]) => `Error: ${msg}\n  with ${address},\n`).join('\n');
+      const leftovers = unimplementedDeletes(asOutput(destroy.errors));
+      if (leftovers.length > 0) {
+        const forget = (address: string) => execFileSync('terraform', ['state', 'rm', address], { cwd: workDir, env: tfEnv, stdio: 'ignore' });
+        for (const { address, operation } of leftovers) {
+          forget(address);
+          const result = results.find((r) => r.address === address);
+          if (result) result.destroyWorkaround = `The emulator has no ${operation}; LocalCloud removes it from Terraform state on destroy`;
+        }
+        log(`removed ${leftovers.length} resource(s) the emulator can't delete from state; destroying the rest`);
+        for (let round = 0; round < 5; round++) {
+          ({ destroy, messages } = await runDestroy());
+          log(`destroy (round ${round + 2}) exit ${destroy.code}`);
+          if (destroy.code === 0) break;
+          const text = asOutput(destroy.errors);
+          const held = [...unimplementedDeletes(text), ...blockedDeletes(text)].map((l) => l.address);
+          if (held.length === 0) break;
+          held.forEach(forget);
+          log(`removed ${held.length} resource(s) still in use by them from state`);
+        }
       }
-      if (unexplained.length === 1 && messages.length === 1) destroy.errors.set(unexplained[0], messages[0].replace(/\s+/g, ' '));
-      else apply.general.push(...messages.map((g) => `destroy: ${g.slice(0, 400)}`));
+      apply.general.push(...messages.map((g) => `destroy: ${g.slice(0, 400)}`));
 
       for (const r of results) {
         const msg = destroy.errors.get(r.address);
@@ -306,34 +425,60 @@ async function testCanvas(canvas: { id: string; nodes: CloudNode[]; edges: Cloud
 
 type RunResult = Awaited<ReturnType<typeof testCanvas>>;
 
+/** A resource that failed for real: not the security group quirk LocalCloud recovers from. */
+const isFailure = (r: ResourceResult) => Boolean((r.error && r.error !== SECURITY_GROUP_QUIRK_NOTE) || r.destroyError);
+
 /**
- * Per resource type: verified only if every instance applied (and destroyed) in every run;
- * second-apply if it only got there after LocalCloud's emulator workaround; otherwise fails.
+ * Per resource type: verified only if every instance applied (and destroyed) in every run with
+ * nothing changed; adjusted if it only works with an emulator-only value or LocalCloud's destroy
+ * workaround; second-apply if it needed LocalCloud's automatic second apply; otherwise fails.
  */
 function summarize(runs: RunResult[]) {
-  type Status = 'verified' | 'second-apply' | 'fails';
-  const byType: Record<string, { status: Status; applied: number; failed: number; errors: string[]; upstreamIssue?: number }> = {};
+  type Status = 'verified' | 'adjusted' | 'second-apply' | 'fails';
+  const rank: Record<Status, number> = { verified: 0, adjusted: 1, 'second-apply': 2, fails: 3 };
+  type Entry = { status: Status; applied: number; failed: number; errors: string[]; upstreamIssue?: number };
+  const byType: Record<string, Entry> = {};
+  // Failure messages, and notes on how a working type was helped along; errors shows whichever matches the status
+  const failures = new Map<string, string[]>();
+  const notes = new Map<string, string[]>();
+  const push = (list: Map<string, string[]>, type: string, msg: string) => {
+    const l = list.get(type) || [];
+    if (l.length < 3 && !l.includes(msg)) l.push(msg);
+    list.set(type, l);
+  };
+  const raise = (entry: Entry, status: Status) => {
+    if (rank[status] > rank[entry.status]) entry.status = status;
+  };
   for (const run of runs) {
     for (const r of run.resources) {
       const entry = (byType[r.type] ||= { status: 'verified', applied: 0, failed: 0, errors: [] });
-      const error = r.error || r.destroyError;
-      if (r.applied && r.error === SECURITY_GROUP_QUIRK_NOTE && !r.destroyError) {
+      const sgQuirk = r.error === SECURITY_GROUP_QUIRK_NOTE;
+      const error = (sgQuirk ? undefined : r.error) || r.destroyError;
+      if (r.applied && !error) {
         entry.applied++;
-        if (entry.status === 'verified') entry.status = 'second-apply';
-        if (!entry.errors.includes(r.error)) entry.errors.push(r.error);
-      } else if (r.applied && !error) entry.applied++;
-      else if (error) {
+        if (sgQuirk) {
+          raise(entry, 'second-apply');
+          push(notes, r.type, SECURITY_GROUP_QUIRK_NOTE);
+        }
+        if (r.adjusted || r.destroyWorkaround) {
+          raise(entry, 'adjusted');
+          push(notes, r.type, EMULATOR_ADJUSTMENTS[r.type]?.note || r.destroyWorkaround || 'Runs with an emulator-only adjustment.');
+        }
+      } else if (error) {
         entry.failed++;
-        entry.status = 'fails';
-        const msg = `${r.destroyError && !r.error ? 'destroy: ' : ''}${error}`;
-        if (entry.errors.length < 3 && !entry.errors.includes(msg)) entry.errors.push(msg);
+        raise(entry, 'fails');
+        push(failures, r.type, `${r.destroyError && !r.error ? 'destroy: ' : ''}${error}`);
       }
       // Neither applied nor errored: skipped because something it depends on failed; says nothing about this type
     }
   }
   for (const [type, entry] of Object.entries(byType)) {
-    if (entry.applied === 0 && entry.failed === 0) delete byType[type];
-    else if (entry.status !== 'verified' && UPSTREAM_ISSUES[type]) entry.upstreamIssue = UPSTREAM_ISSUES[type];
+    if (entry.applied === 0 && entry.failed === 0) {
+      delete byType[type];
+      continue;
+    }
+    entry.errors = (entry.status === 'fails' ? failures : notes).get(type) || [];
+    if (entry.status !== 'verified' && UPSTREAM_ISSUES[type]) entry.upstreamIssue = UPSTREAM_ISSUES[type];
   }
   return byType;
 }
@@ -343,6 +488,7 @@ async function main() {
   const canvases = [
     ...ARCHITECTURE_TEMPLATES.map((t) => ({ id: t.id, nodes: normalizeNodes(structuredClone(t.nodes)), edges: t.edges })),
     coverageCanvas(),
+    connectionsCanvas(),
   ].filter((c) => c.id.includes(args.filter));
 
   const runs: RunResult[] = [];
@@ -381,13 +527,13 @@ async function main() {
 
   console.log('\nrun                                   result  time');
   for (const r of runs) {
-    const failed = r.resources.filter((x) => x.error || x.destroyError).length;
+    const failed = r.resources.filter(isFailure).length;
     console.log(`${`${r.canvas}/${r.envId}`.padEnd(38)}${(r.ok && !failed ? 'ok' : `FAIL ${failed}`).padEnd(8)}${r.durationSeconds}s`);
   }
   console.log(`\nwrote ${path.relative(repoRoot, RESULTS_FILE)}`);
   // A run with no resources never got as far as planning (Docker, the emulator or Terraform failed)
   if (runs.length === 0 || runs.every((r) => r.resources.length === 0)) process.exit(2);
-  const clean = runs.every((r) => r.ok && r.resources.every((x) => !x.error && !x.destroyError));
+  const clean = runs.every((r) => r.ok && r.resources.every((x) => !isFailure(x)));
   process.exit(clean || args.reportOnly ? 0 : 1);
 }
 

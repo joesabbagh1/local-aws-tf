@@ -43,6 +43,12 @@ resource "aws_iam_role" "payments_fn_exec_role" {
   })
 }
 
+# Lets the function write its logs to CloudWatch
+resource "aws_iam_role_policy_attachment" "payments_fn_logs" {
+  role       = aws_iam_role.payments_fn_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
 resource "aws_lambda_function" "payments_fn" {
   function_name                  = "${local.name_prefix}-payments_fn"
   role                           = aws_iam_role.payments_fn_exec_role.arn
@@ -64,6 +70,8 @@ resource "aws_lambda_function" "payments_fn" {
       ENVIRONMENT = var.environment
       LOG_LEVEL = "info"
       STAGE = "local"
+      LEGACY_ROLE_ARN = "${aws_iam_role.legacy.arn}"
+      PAYMENTS_KEY_KEY_ARN = "${aws_kms_key.payments_key.arn}"
     }
   }
 
@@ -135,6 +143,32 @@ resource "aws_iam_role" "legacy" {
 # ============================================================================
 # Cross-Service Wiring, Permissions & Event Triggers (Canvas Edges)
 # ============================================================================
+
+resource "aws_iam_role_policy" "payments_fn_assume_legacy" {
+  name = "payments_fn-assume-legacy"
+  role = aws_iam_role.payments_fn_exec_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole"]
+      Resource = [aws_iam_role.legacy.arn]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "payments_fn_kms_payments_key" {
+  name = "payments_fn-kms-payments_key"
+  role = aws_iam_role.payments_fn_exec_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+      Resource = [aws_kms_key.payments_key.arn]
+    }]
+  })
+}
 
 resource "aws_iam_role_policy" "payments_fn_consume_jobs" {
   name = "payments_fn-consume-jobs"

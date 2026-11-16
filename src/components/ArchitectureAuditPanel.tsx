@@ -2,11 +2,10 @@ import { useMemo, useState } from 'react';
 import { useCloudStore } from '../store/useCloudStore';
 import { runArchitectureLinter } from '../utils/architectureValidator';
 import { estimateArchitectureCosts } from '../utils/costEstimator';
-import type { EnvironmentId, LintFinding } from '../types/cloud';
+import type { LintFinding } from '../types/cloud';
+import { envIdsOf, envLabel } from '../utils/environments';
 import { AlertOctagon, AlertTriangle, Info, CheckCircle2 } from 'lucide-react';
 import { Button, EnvDot, Section, Segmented, cn } from './ui';
-
-const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 
 const SEVERITY_STYLE: Record<LintFinding['severity'], { icon: typeof Info; cls: string }> = {
   error: { icon: AlertOctagon, cls: 'text-err' },
@@ -28,7 +27,11 @@ export function ArchitectureAuditPanel() {
 
   const [severityFilter, setSeverityFilter] = useState<'all' | LintFinding['severity']>('all');
 
-  const findings = useMemo(() => runArchitectureLinter(nodes, edges, activeEnv), [nodes, edges, activeEnv]);
+  const ENV_IDS = useMemo(() => envIdsOf(environments), [environments]);
+  const findings = useMemo(
+    () => runArchitectureLinter(nodes, edges, activeEnv, environments),
+    [nodes, edges, activeEnv, environments]
+  );
   const costs = useMemo(() => estimateArchitectureCosts(nodes, environments), [nodes, environments]);
 
   const counts = {
@@ -60,9 +63,9 @@ export function ArchitectureAuditPanel() {
             const total = costs.totalsByEnv[id];
             return (
               <div key={id} className="flex items-center gap-3">
-                <span className={cn('w-20 text-xs flex items-center gap-2', id === activeEnv ? 'text-fg' : 'text-fg-muted')}>
+                <span className={cn('w-20 min-w-0 text-xs flex items-center gap-2', id === activeEnv ? 'text-fg' : 'text-fg-muted')} title={env.name}>
                   <EnvDot color={env.color} className="w-1.5 h-1.5" />
-                  {env.shortLabel.toLowerCase()}
+                  <span className="truncate">{envLabel(id)}</span>
                 </span>
                 <div className="flex-1 h-1 rounded-full bg-overlay overflow-hidden">
                   <div

@@ -33,7 +33,7 @@ fs.writeFileSync(
 |---|---|---|
 ${rows.join('\n')}
 
-Totals: ${count(after, 'verified')} verified, ${count(after, 'second-apply')} need a second Apply, ${count(after, 'fails')} fail.
+Totals: ${count(after, 'verified')} verified, ${count(after, 'adjusted')} work with an emulator-only adjustment, ${count(after, 'second-apply')} need LocalCloud's second apply, ${count(after, 'fails')} fail.
 A type that starts failing is either a compiler change or an emulator change; check the error before merging.
 `
 );

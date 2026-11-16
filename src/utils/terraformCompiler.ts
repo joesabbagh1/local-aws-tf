@@ -6,6 +6,29 @@ import type {
 } from '../types/cloud';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import { findAncestorOfType } from './canvasLayout';
+import { adjustmentComment, emulatorInstanceType, emulatorKinesisRetention, isBurstableInstanceType } from './emulatorAdjustments';
+import {
+  dnsSafeName,
+  isRedisReplicationGroup,
+  mainResourceType,
+  resolveNodeConfigForEnv,
+  sanitizeIdentifier,
+} from './terraformNames';
+
+import {
+  cloudfrontOrigins,
+  cognitoTriggers,
+  connectionEnvVars,
+  hasGrants,
+  isWired,
+  lbTargets,
+  onDemandCallerRole,
+  renderEdgeWiringBlocks,
+  sfnDefinition,
+} from './terraformWiring';
+
+// These lived here first and are imported from this module all over the app
+export { mainResourceType, resolveNodeConfigForEnv, sanitizeIdentifier };
 
 /**
  * Base dir for the emulator's per-port credentials and CA, as written into provider.tf.
@@ -16,18 +39,6 @@ function emulatorDir(): string {
   return process.env.LOCALCLOUD_EMULATOR_DIR || '~/.aws/emulator';
 }
 
-export function resolveNodeConfigForEnv(
-  node: CloudNode,
-  envId: EnvironmentId
-): Record<string, any> {
-  const base = node.data.baseConfig || {};
-  const overrides = node.data.envOverrides?.[envId] || {};
-  return {
-    ...base,
-    ...overrides,
-  };
-}
-
 export function isFieldOverriddenInEnv(
   node: CloudNode,
   envId: EnvironmentId,
@@ -35,17 +46,6 @@ export function isFieldOverriddenInEnv(
 ): boolean {
   const overrides = node.data.envOverrides?.[envId];
   return Boolean(overrides && Object.prototype.hasOwnProperty.call(overrides, fieldKey));
-}
-
-export function sanitizeIdentifier(name: string): string {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9_]/g, '_')
-      .replace(/^[^a-z_]+/, 'res_')
-      .replace(/_+/g, '_')
-      .replace(/_$/, '') || 'aws_resource'
-  );
 }
 
 /** Config key holding hand-written HCL appended to a node's main resource block. Scoped like any other field. */
@@ -82,6 +82,85 @@ export function injectExtraHcl(blocks: string, tfType: string, resName: string, 
   return `${blocks.slice(0, closeIdx).replace(/\s+$/, '')}\n\n  # Extra arguments (hand-written)\n${indented}\n${blocks.slice(closeIdx)}`;
 }
 
+/** The text of the block that opens at `open` (index of its `{`), braces included, or null if unbalanced. */
+function blockAt(text: string, open: number): { start: number; end: number } | null {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return { start: open, end: i + 1 };
+  }
+  return null;
+}
+
+/**
+ * Terraform allows one `lifecycle` block per resource, but the compiler writes one (to ignore
+ * attributes the emulator reports differently) and Extra HCL can add another. Folds every
+ * lifecycle block of `resource "<tfType>" "<resName>"` into the first: ignore_changes lists are
+ * combined (`all` wins), every other line is kept once.
+ */
+export function mergeLifecycleBlocks(blocks: string, tfType: string, resName: string): string {
+  const header = `resource "${tfType}" "${resName}" {`;
+  const start = blocks.indexOf(header);
+  if (start === -1) return blocks;
+  const resource = blockAt(blocks, start + header.length - 1);
+  if (!resource) return blocks;
+
+  // Lifecycle blocks directly inside the resource (depth 1), not inside a nested block
+  const found: { start: number; end: number; body: string }[] = [];
+  let depth = 0;
+  for (let i = resource.start; i < resource.end; i++) {
+    const ch = blocks[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    else if (depth === 1 && blocks.startsWith('lifecycle', i) && /[\s\n]/.test(blocks[i - 1] ?? '\n')) {
+      const open = blocks.indexOf('{', i);
+      if (!/^lifecycle\s*$/.test(blocks.slice(i, open))) continue;
+      const block = blockAt(blocks, open);
+      if (!block) return blocks;
+      found.push({ start: i, end: block.end, body: blocks.slice(open + 1, block.end - 1) });
+      i = block.end - 1;
+    }
+  }
+  if (found.length < 2) return blocks;
+
+  const ignored: string[] = [];
+  let ignoreAll = false;
+  const lines: string[] = [];
+  for (const { body } of found) {
+    const rest = body.replace(/ignore_changes\s*=\s*(all\b|\[([\s\S]*?)\])/g, (_m, value: string, list?: string) => {
+      if (value === 'all') ignoreAll = true;
+      else for (const item of (list || '').split(',').map((x) => x.trim()).filter(Boolean)) if (!ignored.includes(item)) ignored.push(item);
+      return '';
+    });
+    for (const line of rest.split('\n').map((l) => l.trim()).filter(Boolean)) if (!lines.includes(line)) lines.push(line);
+  }
+
+  // Re-indent nested blocks (preconditions, postconditions) by their brace depth
+  let level = 2;
+  const indented = lines.map((line) => {
+    if (line.startsWith('}')) level--;
+    const out = `${'  '.repeat(level)}${line}`;
+    if (line.endsWith('{')) level++;
+    return out;
+  });
+  const merged = [
+    'lifecycle {',
+    ...(ignoreAll ? ['    ignore_changes = all'] : ignored.length ? [`    ignore_changes = [${ignored.join(', ')}]`] : []),
+    ...indented,
+    '  }',
+  ].join('\n');
+
+  let out = blocks;
+  // Remove from the end so earlier offsets stay valid, then put the merged block where the first one was
+  for (const block of [...found.slice(1)].reverse()) {
+    const lineStart = out.lastIndexOf('\n', block.start - 1);
+    out = out.slice(0, lineStart) + out.slice(block.end);
+  }
+  out = out.slice(0, found[0].start) + merged + out.slice(found[0].end);
+  // The hand-written section may now be empty: drop its heading
+  return out.replace(/\n+ {2}# Extra arguments \(hand-written\)\n*(?=\}(?:\n|$))/g, '\n');
+}
+
 /**
  * Where the Terraform is meant to run. `emulator` is what LocalCloud plans and applies locally;
  * `aws` is the export for real accounts: no emulator endpoints, S3 remote state, and real values
@@ -89,32 +168,8 @@ export function injectExtraHcl(blocks: string, tfType: string, resName: string, 
  */
 export type CompileTarget = 'emulator' | 'aws';
 
-/**
- * Name expression for resources whose AWS names allow only lowercase letters, digits and hyphens
- * (load balancers, target groups, S3 buckets, RDS, ElastiCache, OpenSearch). Underscores become
- * hyphens and the name is cut to the service's limit without leaving a trailing hyphen.
- */
-function dnsSafeName(base: string, maxLength: number): string {
-  const slug = base.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  return `trimsuffix(substr("\${local.name_prefix}-${slug}", 0, ${maxLength}), "-")`;
-}
-
 /** Services AWS only accepts with subnets in two or more availability zones. */
 const MULTI_AZ_TYPES = new Set(['aws_lb', 'aws_db_instance', 'aws_elasticache_cluster']);
-
-/** Redis with more than one node is a replication group, not a cluster. */
-function isRedisReplicationGroup(serviceType: string, cfg: Record<string, any>): boolean {
-  return serviceType === 'aws_elasticache_cluster' && (cfg.engine || 'redis') === 'redis' && Number(cfg.num_cache_nodes ?? 1) > 1;
-}
-
-/**
- * The Terraform type of a node's main resource, which can depend on its config (multi-node Redis).
- * Status, outputs and Extra HCL all attach to `<this type>.<resource name>`.
- */
-export function mainResourceType(node: CloudNode, cfg: Record<string, any>): string {
-  if (isRedisReplicationGroup(node.data.serviceType, cfg)) return 'aws_elasticache_replication_group';
-  return SERVICE_BY_TYPE[node.data.serviceType]?.terraformResourceType || node.data.serviceType;
-}
 
 /**
  * Placeholder AMI the catalog ships as a default. It exists in neither AWS nor the emulator, so both
@@ -288,14 +343,17 @@ locals {
       outgoing,
       nodeById,
       dependsOnLine,
-      target
+      target,
+      {
+        explicitVpc: incoming.some((e) => nodeById[e.source]?.data.serviceType === 'aws_vpc'),
+        explicitSubnets: connectedSubnets,
+      }
     );
 
     const extraHcl = typeof cfg[EXTRA_HCL_KEY] === 'string' ? cfg[EXTRA_HCL_KEY] : '';
+    const mainType = mainResourceType(node, cfg);
     resourceBlocks.push(
-      extraHcl.trim()
-        ? injectExtraHcl(block, mainResourceType(node, cfg), resName, extraHcl)
-        : block
+      extraHcl.trim() ? mergeLifecycleBlocks(injectExtraHcl(block, mainType, resName, extraHcl), mainType, resName) : block
     );
   }
 
@@ -338,9 +396,9 @@ data "aws_ssm_parameter" "al2023_ami_${arch}" {
   // 5. Generate outputs.tf
   const outputsTf = generateOutputsTf(activeNodes, envId);
 
-  // 6. Generate AWS Emulator helper scripts & Docker Compose for all 4 environments
+  // 6. Generate AWS Emulator helper scripts & Docker Compose for every environment
   const emulatorScriptSh = generateEmulatorShellScript(envProfile, allEnvironments);
-  const dockerfile = generateEmulatorDockerfile();
+  const dockerfile = generateEmulatorDockerfile(allEnvironments);
   const dockerComposeYml = generateDockerComposeYml(allEnvironments);
 
   return {
@@ -533,7 +591,7 @@ variable "emulator_endpoint" {
     .join('\n');
 
   const variablesTf = `variable "environment" {
-  description = "Target deployment environment (dev, testing, staging, prod)"
+  description = "Target deployment environment (${Object.keys(allEnvs).join(', ')})"
   type        = string
   default     = "${env.id}"
 }
@@ -607,9 +665,17 @@ function renderResourceBlock(
   outgoing: CloudEdge[],
   nodeById: Record<string, CloudNode>,
   dependsOnLine: string,
-  target: CompileTarget
+  target: CompileTarget,
+  /** Placement the canvas states outright (a wire or nesting), as opposed to the fallbacks above. */
+  placement: { explicitVpc: boolean; explicitSubnets: CloudNode[] } = { explicitVpc: false, explicitSubnets: [] }
 ): string {
   const type = node.data.serviceType;
+  /** `depends_on` for this resource: what the canvas asks for plus what its own wiring needs. */
+  const dependsOn = (extra: string[]) => {
+    if (extra.length === 0) return dependsOnLine;
+    const existing = dependsOnLine.match(/\[(.*)\]/)?.[1];
+    return `\n  depends_on = [${[...(existing ? [existing] : []), ...extra].join(', ')}]`;
+  };
   const isAws = target === 'aws';
   // Real subnets to place the resource in; the emulator build's placeholder IDs don't count
   const hasSubnets = effectiveSubnets.length > 0 || isAws;
@@ -652,6 +718,10 @@ function renderResourceBlock(
           )
           .join(', ')}]`
       : `[]`;
+
+  // EC2, Auto Scaling and EKS only get a role once a connection grants them something
+  const granted = hasGrants(node, outgoing, nodeById);
+  const onDemandRole = granted ? `${onDemandCallerRole(node, resName)}\n\n` : '';
 
   switch (type) {
     case 'aws_vpc':
@@ -727,7 +797,17 @@ resource "aws_nat_gateway" "${resName}" {
   tags = merge(local.common_tags, {
     Name = "\${local.name_prefix}-${resName}"
   })${dependsOnLine}
+}${placement.explicitSubnets
+        .map((subnet) => {
+          const subnetName = sanitizeIdentifier(subnet.data.resourceName || subnet.data.label);
+          return `
+
+resource "aws_route_table_association" "${resName}_${subnetName}" {
+  subnet_id      = aws_subnet.${subnetName}.id
+  route_table_id = aws_route_table.${resName}.id
 }`;
+        })
+        .join('')}`;
     }
 
     case 'aws_security_group':
@@ -756,7 +836,65 @@ resource "aws_nat_gateway" "${resName}" {
   })${dependsOnLine}
 }`;
 
-    case 'aws_lb':
+    case 'aws_lb': {
+      const listenerPort = Number(cfg.listener_port ?? 80);
+      const healthCheck = `health_check {
+    enabled             = true
+    path                = "${cfg.health_check_path || '/health'}"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    timeout             = 5
+    interval            = 30
+  }`;
+      const plan = lbTargets(resName, outgoing, nodeById);
+      const extraGroups = plan.groups
+        .map((group) =>
+          group.kind === 'instance'
+            ? `
+
+# EC2 instances and Auto Scaling groups register by instance ID
+resource "aws_lb_target_group" "${group.tg}" {
+  name        = ${dnsSafeName(`${resName}-inst`, 32)}
+  port        = ${listenerPort}
+  protocol    = "HTTP"
+  vpc_id      = ${vpcRef}
+  target_type = "instance"
+
+  ${healthCheck}
+}`
+            : `
+
+resource "aws_lb_target_group" "${group.tg}" {
+  target_type = "lambda"
+
+  tags = merge(local.common_tags, {
+    Name = "\${local.name_prefix}-${resName}-${group.key}"
+  })
+}`
+        )
+        .join('');
+      const rules = plan.ruled
+        .map(
+          (rule, i) => `
+
+resource "aws_lb_listener_rule" "${resName}_to_${rule.key}" {
+  listener_arn = aws_lb_listener.${resName}_listener.arn
+  priority     = ${(i + 1) * 10}
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.${rule.tg}.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/${rule.key.replace(/_/g, '-')}/*"]
+    }
+  }
+}`
+        )
+        .join('');
+
       return `resource "aws_lb" "${resName}" {
   name                       = ${dnsSafeName(resName, 32)}
   internal                   = ${Boolean(cfg.internal ?? false)}
@@ -773,31 +911,25 @@ resource "aws_nat_gateway" "${resName}" {
 
 resource "aws_lb_target_group" "${resName}_tg" {
   name        = ${dnsSafeName(`${resName}-tg`, 32)}
-  port        = ${Number(cfg.listener_port ?? 80)}
+  port        = ${listenerPort}
   protocol    = "HTTP"
   vpc_id      = ${vpcRef}
   target_type = "ip"
 
-  health_check {
-    enabled             = true
-    path                = "${cfg.health_check_path || '/health'}"
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-    timeout             = 5
-    interval            = 30
-  }
-}
+  ${healthCheck}
+}${extraGroups}
 
 resource "aws_lb_listener" "${resName}_listener" {
   load_balancer_arn = aws_lb.${resName}.arn
-  port              = ${Number(cfg.listener_port ?? 80)}
+  port              = ${listenerPort}
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.${resName}_tg.arn
+    target_group_arn = aws_lb_target_group.${plan.defaultTg}.arn
   }
-}`;
+}${rules}`;
+    }
 
     case 'aws_apigatewayv2_api':
       return `resource "aws_apigatewayv2_api" "${resName}" {
@@ -828,32 +960,24 @@ resource "aws_apigatewayv2_stage" "${resName}_stage" {
 }`;
 
     case 'aws_cloudfront_distribution': {
-      // Find connected origin (S3, ALB, or API GW)
-      const originTarget = outgoing
-        .map((e) => nodeById[e.target])
-        .find(Boolean);
-      let originDomain = `"origin.${envId}.localcloud.internal"`;
-      if (originTarget) {
-        const tName = sanitizeIdentifier(
-          originTarget.data.resourceName || originTarget.data.label
-        );
-        if (originTarget.data.serviceType === 'aws_s3_bucket') {
-          originDomain = `aws_s3_bucket.${tName}.bucket_regional_domain_name`;
-        } else if (originTarget.data.serviceType === 'aws_lb') {
-          originDomain = `aws_lb.${tName}.dns_name`;
-        } else if (originTarget.data.serviceType === 'aws_apigatewayv2_api') {
-          originDomain = `replace(aws_apigatewayv2_api.${tName}.api_endpoint, "https://", "")`;
-        }
+      // One origin per connected bucket, load balancer, API or function; the first takes the default route
+      const origins = cloudfrontOrigins(resName, outgoing, nodeById, envId);
+      const behaviour = (originId: string) => `allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = "${originId}"
+    viewer_protocol_policy = "${cfg.viewer_protocol_policy || 'redirect-to-https'}"
+
+    forwarded_values {
+      query_string = true
+      cookies {
+        forward = "none"
       }
-
-      return `resource "aws_cloudfront_distribution" "${resName}" {
-  enabled             = ${Boolean(cfg.enabled ?? true)}
-  is_ipv6_enabled     = ${Boolean(cfg.is_ipv6_enabled ?? true)}
-  default_root_object = "${cfg.default_root_object || 'index.html'}"
-  price_class         = "${cfg.price_class || 'PriceClass_100'}"
-
-  origin {
-    domain_name = ${originDomain}
+    }`;
+      const originBlocks =
+        origins.length > 0
+          ? origins.map((o) => `  origin {\n    ${o.body}\n  }`).join('\n\n')
+          : `  origin {
+    domain_name = "origin.${envId}.localcloud.internal"
     origin_id   = "${resName}-primary-origin"
 
     custom_origin_config {
@@ -862,21 +986,30 @@ resource "aws_apigatewayv2_stage" "${resName}_stage" {
       origin_protocol_policy = "https-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
-  }
+  }`;
+      const orderedBehaviours = origins
+        .slice(1)
+        .map(
+          (o) => `
+
+  ordered_cache_behavior {
+    path_pattern           = "/${o.path.replace(/_/g, '-')}/*"
+    ${behaviour(o.id)}
+  }`
+        )
+        .join('');
+
+      return `resource "aws_cloudfront_distribution" "${resName}" {
+  enabled             = ${Boolean(cfg.enabled ?? true)}
+  is_ipv6_enabled     = ${Boolean(cfg.is_ipv6_enabled ?? true)}
+  default_root_object = "${cfg.default_root_object || 'index.html'}"
+  price_class         = "${cfg.price_class || 'PriceClass_100'}"
+
+${originBlocks}
 
   default_cache_behavior {
-    allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
-    cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "${resName}-primary-origin"
-    viewer_protocol_policy = "${cfg.viewer_protocol_policy || 'redirect-to-https'}"
-
-    forwarded_values {
-      query_string = true
-      cookies {
-        forward = "none"
-      }
-    }
-  }
+    ${behaviour(`${resName}-primary-origin`)}
+  }${orderedBehaviours}
 
   restrictions {
     geo_restriction {
@@ -898,7 +1031,7 @@ resource "aws_apigatewayv2_stage" "${resName}_stage" {
       return `resource "aws_route53_zone" "${resName}" {
   name = "${cfg.domain_name || `${envId}.localcloud.dev`}"
 ${
-  cfg.private_zone
+  cfg.private_zone || placement.explicitVpc
     ? `
   vpc {
     vpc_id = ${vpcRef}
@@ -910,10 +1043,18 @@ ${
   })${dependsOnLine}
 }`;
 
-    case 'aws_instance':
-      return `resource "aws_instance" "${resName}" {
-  ami                         = ${amiExpression(cfg.ami, cfg.instance_type || 't3.micro')}
-  instance_type               = "${cfg.instance_type || 't3.micro'}"
+    case 'aws_instance': {
+      const designedType = String(cfg.instance_type || 't3.micro');
+      const runType = isAws ? designedType : emulatorInstanceType(designedType);
+      const typeNote =
+        runType !== designedType
+          ? `  ${adjustmentComment('aws_instance', `${designedType} runs as ${runType}, since the emulator can't read burstable instances' CPU credits`)}\n`
+          : '';
+      return `${onDemandRole}resource "aws_instance" "${resName}" {
+  ami                         = ${amiExpression(cfg.ami, designedType)}
+${typeNote}  instance_type               = "${runType}"${
+    granted ? `\n  iam_instance_profile        = aws_iam_instance_profile.${resName}_profile.name` : ''
+  }
   subnet_id                   = ${firstSubnetRef}${
     // Same zone as the subnet. Redundant on AWS, but the emulator rejects the empty zone the provider sends otherwise
     effectiveSubnets.length > 0
@@ -936,8 +1077,15 @@ ${cfg.user_data || '#!/bin/bash\necho "Ready"'}
 
   tags = merge(local.common_tags, {
     Name = "\${local.name_prefix}-${resName}"
-  })${dependsOnLine}
+  })${
+    // The emulator keeps an 8 GB unencrypted root volume whatever was asked, and `encrypted`
+    // forces replacement: without this every plan after an apply would replace the instance
+    isAws
+      ? ''
+      : `\n\n  # Emulator only: it ignores root volume settings. The AWS export keeps your size, type and encryption.\n  lifecycle {\n    ignore_changes = [root_block_device]\n  }`
+  }${dependsOnLine}
 }`;
+    }
 
     case 'aws_lambda_function': {
       let parsedEnvVars: Record<string, string> = {};
@@ -950,26 +1098,8 @@ ${cfg.user_data || '#!/bin/bash\necho "Ready"'}
         parsedEnvVars = { STAGE: envId };
       }
 
-      // Inject connected downstream target endpoints into Lambda environment variables automatically!
-      for (const edge of outgoing) {
-        const targetNode = nodeById[edge.target];
-        if (!targetNode) continue;
-        const tRes = sanitizeIdentifier(
-          targetNode.data.resourceName || targetNode.data.label
-        );
-        const envKeyPrefix = tRes.toUpperCase();
-        if (targetNode.data.serviceType === 'aws_dynamodb_table') {
-          parsedEnvVars[`${envKeyPrefix}_TABLE_NAME`] = `\${aws_dynamodb_table.${tRes}.name}`;
-        } else if (targetNode.data.serviceType === 'aws_sqs_queue') {
-          parsedEnvVars[`${envKeyPrefix}_QUEUE_URL`] = `\${aws_sqs_queue.${tRes}.url}`;
-        } else if (targetNode.data.serviceType === 'aws_s3_bucket') {
-          parsedEnvVars[`${envKeyPrefix}_BUCKET_NAME`] = `\${aws_s3_bucket.${tRes}.id}`;
-        } else if (targetNode.data.serviceType === 'aws_sns_topic') {
-          parsedEnvVars[`${envKeyPrefix}_TOPIC_ARN`] = `\${aws_sns_topic.${tRes}.arn}`;
-        } else if (targetNode.data.serviceType === 'aws_secretsmanager_secret') {
-          parsedEnvVars[`${envKeyPrefix}_SECRET_ARN`] = `\${aws_secretsmanager_secret.${tRes}.arn}`;
-        }
-      }
+      // Where each connected resource is: <TARGET>_TABLE_NAME, <TARGET>_QUEUE_URL, …
+      Object.assign(parsedEnvVars, connectionEnvVars(node, incoming, outgoing, nodeById, envId));
 
       // Claude through Amazon Bedrock's Messages API (bedrock-mantle): the model ID for the code, and the permission
       const claudeModelId = typeof cfg.claude_model_id === 'string' ? cfg.claude_model_id.trim() : '';
@@ -992,6 +1122,12 @@ ${cfg.user_data || '#!/bin/bash\necho "Ready"'}
       }
     }]
   })
+}
+
+# Lets the function write its logs to CloudWatch
+resource "aws_iam_role_policy_attachment" "${resName}_logs" {
+  role       = aws_iam_role.${resName}_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_lambda_function" "${resName}" {
@@ -1043,10 +1179,20 @@ resource "aws_iam_role_policy" "${resName}_claude" {
     }
 
     case 'aws_autoscaling_group':
-      return `resource "aws_launch_template" "${resName}_lt" {
+      return `${onDemandRole}resource "aws_launch_template" "${resName}_lt" {
   name_prefix   = "\${local.name_prefix}-${resName}-"
   image_id      = ${amiExpression(undefined, cfg.instance_type || 't3.medium')}
-  instance_type = "${cfg.instance_type || 't3.medium'}"
+  instance_type = "${cfg.instance_type || 't3.medium'}"${
+    effectiveSgs.length > 0 ? `\n  vpc_security_group_ids = ${sgIdsArray}` : ''
+  }${
+    granted
+      ? `
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.${resName}_profile.name
+  }`
+      : ''
+  }
 }
 
 resource "aws_autoscaling_group" "${resName}" {
@@ -1064,7 +1210,53 @@ resource "aws_autoscaling_group" "${resName}" {
   }
 }`;
 
-    case 'aws_ecs_service':
+    case 'aws_ecs_service': {
+      const wiredIn = incoming.filter(isWired).map((e) => nodeById[e.source]).filter(Boolean);
+      const nameOf = (n: CloudNode) => sanitizeIdentifier(n.data.resourceName || n.data.label);
+      // An image repository on the canvas is where the image comes from
+      const repo = wiredIn.find((n) => n.data.serviceType === 'aws_ecr_repository');
+      const image = repo
+        ? `\${aws_ecr_repository.${nameOf(repo)}.repository_url}:latest`
+        : cfg.container_image || 'public.ecr.aws/nginx/nginx:stable-alpine';
+      const containerEnv = Object.entries(connectionEnvVars(node, incoming, outgoing, nodeById, envId))
+        // A template that is only one interpolation keeps its type in HCL (a port is a number), and
+        // ECS rejects anything but strings here
+        .map(([key, value]) => {
+          const single = value.match(/^\$\{([\s\S]*)\}$/);
+          const expr = single && !single[1].includes('${') ? `tostring(${single[1]})` : `"${value}"`;
+          return `,\n        { name = "${key}", value = ${expr} }`;
+        })
+        .join('');
+      // A connected log group receives the container's output
+      const logGroup = outgoing
+        .filter(isWired)
+        .map((e) => nodeById[e.target])
+        .find((n) => n?.data.serviceType === 'aws_cloudwatch_log_group');
+      const logConfiguration = logGroup
+        ? `
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.${nameOf(logGroup)}.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "${resName}"
+        }
+      }`
+        : '';
+      // Load balancers in front of the service: tasks register in their IP target group
+      const loadBalancers = wiredIn.filter((n) => n.data.serviceType === 'aws_lb').map(nameOf);
+      const loadBalancerBlocks = loadBalancers
+        .map(
+          (lb) => `
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.${lb}_tg.arn
+    container_name   = "${resName}"
+    container_port   = ${Number(cfg.container_port ?? 80)}
+  }`
+        )
+        .join('');
+
       return `resource "aws_ecs_cluster" "${resName}_cluster" {
   name = "\${local.name_prefix}-${resName}-cluster"
 
@@ -1145,7 +1337,7 @@ resource "aws_ecs_task_definition" "${resName}_task" {
   container_definitions = jsonencode([
     {
       name      = "${resName}"
-      image     = "${cfg.container_image || 'public.ecr.aws/nginx/nginx:stable-alpine'}"
+      image     = "${image}"
       essential = true
       portMappings = [
         {
@@ -1155,8 +1347,8 @@ resource "aws_ecs_task_definition" "${resName}_task" {
         }
       ]
       environment = [
-        { name = "ENVIRONMENT", value = var.environment }
-      ]
+        { name = "ENVIRONMENT", value = var.environment }${containerEnv}
+      ]${logConfiguration}
     }
   ])
 }
@@ -1173,13 +1365,14 @@ resource "aws_ecs_service" "${resName}" {
     subnets          = ${subnetIdsArray}
     security_groups  = ${sgIdsArray}
     assign_public_ip = ${Boolean(cfg.assign_public_ip ?? false)}
-  }
+  }${loadBalancerBlocks}
 
-  tags = local.common_tags${dependsOnLine}
+  tags = local.common_tags${dependsOn(loadBalancers.map((lb) => `aws_lb_listener.${lb}_listener`))}
 }`;
+    }
 
     case 'aws_eks_cluster':
-      return `resource "aws_iam_role" "${resName}_eks_role" {
+      return `${onDemandRole}resource "aws_iam_role" "${resName}_eks_role" {
   name = "\${local.name_prefix}-${resName}-eks-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -1197,7 +1390,9 @@ resource "aws_eks_cluster" "${resName}" {
   version  = "${cfg.kubernetes_version || '1.31'}"
 
   vpc_config {
-    subnet_ids              = ${subnetIdsArray}
+    subnet_ids              = ${subnetIdsArray}${
+      effectiveSgs.length > 0 ? `\n    security_group_ids      = ${sgIdsArray}` : ''
+    }
     endpoint_public_access  = ${Boolean(cfg.endpoint_public_access ?? true)}
     endpoint_private_access = ${Boolean(cfg.endpoint_private_access ?? true)}
   }
@@ -1285,6 +1480,10 @@ resource "aws_eks_cluster" "${resName}" {
     case 'aws_dynamodb_table': {
       const isProv = cfg.billing_mode === 'PROVISIONED';
       const hasRangeKey = Boolean(cfg.range_key && String(cfg.range_key).trim());
+      // A Lambda wired to the table reads its stream, so the stream has to exist
+      const streamConsumed = outgoing.some(
+        (e) => isWired(e) && nodeById[e.target]?.data.serviceType === 'aws_lambda_function'
+      );
       return `resource "aws_dynamodb_table" "${resName}" {
   name             = "\${local.name_prefix}-${resName}"
   billing_mode     = "${cfg.billing_mode || 'PAY_PER_REQUEST'}"
@@ -1293,7 +1492,7 @@ ${hasRangeKey ? `  range_key        = "${cfg.range_key}"\n` : ''}${
         isProv
           ? `  read_capacity    = ${Number(cfg.read_capacity ?? 5)}\n  write_capacity   = ${Number(cfg.write_capacity ?? 5)}\n`
           : ''
-      }  stream_enabled   = ${Boolean(cfg.stream_enabled ?? true)}
+      }  stream_enabled   = ${Boolean(cfg.stream_enabled ?? true) || streamConsumed}
   stream_view_type = "${cfg.stream_view_type || 'NEW_AND_OLD_IMAGES'}"
 
   attribute {
@@ -1380,9 +1579,16 @@ ${
 
 `
         : '';
-      const placement = hasSubnets
+      // The emulator runs a real Redis on a port of its own and reports that one back; without this,
+      // every plan after an apply would replace the cache (port forces replacement)
+      const portDrift = isAws
+        ? ''
+        : `\n\n  # Emulator only: it serves the cache on a port of its own choosing. The AWS export keeps the designed port.\n  lifecycle {\n    ignore_changes = [port]\n  }`;
+      const cachePlacement = hasSubnets
         ? `\n  subnet_group_name    = aws_elasticache_subnet_group.${resName}_subnets.name\n  security_group_ids   = ${sgIdsArray}`
-        : '';
+        : effectiveSgs.length > 0
+          ? `\n  security_group_ids   = ${sgIdsArray}`
+          : '';
 
       if (isRedisReplicationGroup(type, cfg)) {
         const nodes = Number(cfg.num_cache_nodes);
@@ -1395,11 +1601,11 @@ resource "aws_elasticache_replication_group" "${resName}" {
   num_cache_clusters         = ${nodes}
   port                       = ${Number(cfg.port ?? 6379)}
   automatic_failover_enabled = true
-  multi_az_enabled           = true${placement}
+  multi_az_enabled           = true${cachePlacement}
 
   tags = merge(local.common_tags, {
     Name = "\${local.name_prefix}-${resName}"
-  })${dependsOnLine}
+  })${portDrift}${dependsOnLine}
 }`;
       }
 
@@ -1408,11 +1614,11 @@ resource "aws_elasticache_replication_group" "${resName}" {
   engine               = "${cfg.engine || 'redis'}"
   node_type            = "${cfg.node_type || 'cache.t4g.micro'}"
   num_cache_nodes      = ${Number(cfg.num_cache_nodes ?? 1)}
-  port                 = ${Number(cfg.port ?? 6379)}${placement}
+  port                 = ${Number(cfg.port ?? 6379)}${cachePlacement}
 
   tags = merge(local.common_tags, {
     Name = "\${local.name_prefix}-${resName}"
-  })${dependsOnLine}
+  })${portDrift}${dependsOnLine}
 }`;
     }
 
@@ -1498,16 +1704,7 @@ resource "aws_sfn_state_machine" "${resName}" {
   role_arn = aws_iam_role.${resName}_sfn_role.arn
   type     = "${cfg.type || 'STANDARD'}"
 
-  definition = jsonencode({
-    Comment = "Compiled by LocalCloud Studio"
-    StartAt = "InvokePrimaryStep"
-    States = {
-      InvokePrimaryStep = {
-        Type = "Pass"
-        End  = true
-      }
-    }
-  })
+  definition = jsonencode(${sfnDefinition(outgoing, nodeById, envId)})
 
   tracing_configuration {
     enabled = ${Boolean(cfg.tracing_enabled ?? true)}
@@ -1563,12 +1760,24 @@ resource "aws_secretsmanager_secret_version" "${resName}_val" {
   secret_string = ${JSON.stringify(cfg.secret_json || '{"key":"value"}')}
 }`;
 
-    case 'aws_cognito_user_pool':
+    case 'aws_cognito_user_pool': {
+      const triggers = cognitoTriggers(outgoing, nodeById);
+      const lambdaConfig = triggers.length
+        ? `
+  lambda_config {
+${triggers.map((t) => `    ${t.trigger} = aws_lambda_function.${t.fn}.arn`).join('\n')}
+  }
+`
+        : '';
+      // An API that authorizes with this pool needs a client for its tokens' audience
+      const needsClient =
+        Boolean(cfg.create_app_client) ||
+        outgoing.some((e) => isWired(e) && nodeById[e.target]?.data.serviceType === 'aws_apigatewayv2_api');
       return `resource "aws_cognito_user_pool" "${resName}" {
   name                     = "\${local.name_prefix}-${resName}"
   mfa_configuration        = "${cfg.mfa_configuration || 'OFF'}"
   auto_verified_attributes = ${cfg.auto_verified_attributes ? '["email"]' : '[]'}
-${
+${lambdaConfig}${
   // OPTIONAL or ON needs an MFA method; authenticator apps need no SMS setup
   (cfg.mfa_configuration || 'OFF') !== 'OFF'
     ? `
@@ -1588,7 +1797,7 @@ ${
 
   tags = local.common_tags${dependsOnLine}
 }${
-        cfg.create_app_client
+        needsClient
           ? `
 
 resource "aws_cognito_user_pool_client" "${resName}_client" {
@@ -1602,6 +1811,7 @@ resource "aws_cognito_user_pool_client" "${resName}_client" {
 }`
           : ''
       }`;
+    }
 
     case 'aws_cloudwatch_log_group':
       return `resource "aws_cloudwatch_log_group" "${resName}" {
@@ -1620,10 +1830,16 @@ resource "aws_cognito_user_pool_client" "${resName}_client" {
   tags = local.common_tags${dependsOnLine}
 }`;
 
-    case 'aws_kinesis_stream':
+    case 'aws_kinesis_stream': {
+      const designedRetention = Number(cfg.retention_period ?? 24);
+      const kinesisRetention = isAws ? designedRetention : emulatorKinesisRetention(designedRetention);
+      const retentionNote =
+        kinesisRetention !== designedRetention
+          ? `  ${adjustmentComment('aws_kinesis_stream', `${designedRetention} hours of retention runs as ${kinesisRetention}, since the emulator rejects 24`)}\n`
+          : '';
       return `resource "aws_kinesis_stream" "${resName}" {
   name             = "\${local.name_prefix}-${resName}"
-  retention_period = ${Number(cfg.retention_period ?? 24)}
+${retentionNote}  retention_period = ${kinesisRetention}
 ${
   cfg.stream_mode === 'PROVISIONED'
     ? `  shard_count      = ${Number(cfg.shard_count ?? 1)}`
@@ -1635,6 +1851,7 @@ ${
 
   tags = local.common_tags${dependsOnLine}
 }`;
+    }
 
     case 'aws_opensearch_domain':
       return `resource "aws_opensearch_domain" "${resName}" {
@@ -1688,161 +1905,6 @@ resource "aws_bedrockagent_agent" "${resName}" {
   }
 }
 
-function renderEdgeWiringBlocks(
-  edges: CloudEdge[],
-  nodeById: Record<string, CloudNode>,
-  _envId: EnvironmentId
-): string[] {
-  const blocks: string[] = [];
-
-  for (const edge of edges) {
-    const src = nodeById[edge.source];
-    const dst = nodeById[edge.target];
-    if (!src || !dst) continue;
-
-    const srcName = sanitizeIdentifier(src.data.resourceName || src.data.label);
-    const dstName = sanitizeIdentifier(dst.data.resourceName || dst.data.label);
-    const srcType = src.data.serviceType;
-    const dstType = dst.data.serviceType;
-
-    // 1. API Gateway -> Lambda Integration & Route & Permission
-    if (srcType === 'aws_apigatewayv2_api' && dstType === 'aws_lambda_function') {
-      blocks.push(`resource "aws_apigatewayv2_integration" "${srcName}_to_${dstName}" {
-  api_id                 = aws_apigatewayv2_api.${srcName}.id
-  integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.${dstName}.invoke_arn
-  payload_format_version = "2.0"
-}
-
-resource "aws_apigatewayv2_route" "${srcName}_route_${dstName}" {
-  api_id    = aws_apigatewayv2_api.${srcName}.id
-  route_key = "${edge.data?.label && edge.data.label.includes('/') ? edge.data.label : `ANY /${dstName}/{proxy+}`}"
-  target    = "integrations/\${aws_apigatewayv2_integration.${srcName}_to_${dstName}.id}"
-}
-
-resource "aws_lambda_permission" "${srcName}_invoke_${dstName}" {
-  statement_id  = "AllowExecutionFromAPIGateway-${srcName}"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.${dstName}.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "\${aws_apigatewayv2_api.${srcName}.execution_arn}/*/*"
-}`);
-    }
-
-    // 2. SQS Queue -> Lambda Event Source Mapping
-    if (srcType === 'aws_sqs_queue' && dstType === 'aws_lambda_function') {
-      blocks.push(`resource "aws_iam_role_policy" "${dstName}_consume_${srcName}" {
-  name = "${dstName}-consume-${srcName}"
-  role = aws_iam_role.${dstName}_exec_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]
-      Resource = aws_sqs_queue.${srcName}.arn
-    }]
-  })
-}
-
-resource "aws_lambda_event_source_mapping" "${srcName}_trigger_${dstName}" {
-  event_source_arn = aws_sqs_queue.${srcName}.arn
-  function_name    = aws_lambda_function.${dstName}.arn
-  batch_size       = 10
-  enabled          = true
-  depends_on       = [aws_iam_role_policy.${dstName}_consume_${srcName}]
-}`);
-    }
-
-    // 3. Kinesis Stream -> Lambda Event Source Mapping
-    if (srcType === 'aws_kinesis_stream' && dstType === 'aws_lambda_function') {
-      blocks.push(`resource "aws_iam_role_policy" "${dstName}_consume_${srcName}" {
-  name = "${dstName}-consume-${srcName}"
-  role = aws_iam_role.${dstName}_exec_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["kinesis:GetRecords", "kinesis:GetShardIterator", "kinesis:DescribeStream", "kinesis:DescribeStreamSummary", "kinesis:ListShards", "kinesis:ListStreams"]
-      Resource = aws_kinesis_stream.${srcName}.arn
-    }]
-  })
-}
-
-resource "aws_lambda_event_source_mapping" "${srcName}_stream_${dstName}" {
-  event_source_arn  = aws_kinesis_stream.${srcName}.arn
-  function_name     = aws_lambda_function.${dstName}.arn
-  starting_position = "LATEST"
-  batch_size        = 100
-  depends_on        = [aws_iam_role_policy.${dstName}_consume_${srcName}]
-}`);
-    }
-
-    // 4. SNS Topic -> SQS or Lambda Subscription
-    if (srcType === 'aws_sns_topic' && dstType === 'aws_sqs_queue') {
-      blocks.push(`resource "aws_sns_topic_subscription" "${srcName}_sub_${dstName}" {
-  topic_arn = aws_sns_topic.${srcName}.arn
-  protocol  = "sqs"
-  endpoint  = aws_sqs_queue.${dstName}.arn
-}`);
-    }
-    if (srcType === 'aws_sns_topic' && dstType === 'aws_lambda_function') {
-      blocks.push(`resource "aws_sns_topic_subscription" "${srcName}_sub_${dstName}" {
-  topic_arn = aws_sns_topic.${srcName}.arn
-  protocol  = "lambda"
-  endpoint  = aws_lambda_function.${dstName}.arn
-}`);
-    }
-
-    // 5. Lambda -> DynamoDB / S3 / SQS / SecretsManager IAM Role Policy Grant
-    if (srcType === 'aws_lambda_function') {
-      if (dstType === 'aws_dynamodb_table') {
-        blocks.push(`resource "aws_iam_role_policy" "${srcName}_ddb_${dstName}" {
-  name = "${srcName}-ddb-${dstName}"
-  role = aws_iam_role.${srcName}_exec_role.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan"]
-      Resource = [aws_dynamodb_table.${dstName}.arn, "\${aws_dynamodb_table.${dstName}.arn}/index/*"]
-    }]
-  })
-}`);
-      } else if (dstType === 'aws_s3_bucket') {
-        blocks.push(`resource "aws_iam_role_policy" "${srcName}_s3_${dstName}" {
-  name = "${srcName}-s3-${dstName}"
-  role = aws_iam_role.${srcName}_exec_role.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
-      Resource = [aws_s3_bucket.${dstName}.arn, "\${aws_s3_bucket.${dstName}.arn}/*"]
-    }]
-  })
-}`);
-      } else if (dstType === 'aws_sqs_queue') {
-        blocks.push(`resource "aws_iam_role_policy" "${srcName}_sqs_${dstName}" {
-  name = "${srcName}-sqs-${dstName}"
-  role = aws_iam_role.${srcName}_exec_role.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-      Resource = [aws_sqs_queue.${dstName}.arn]
-    }]
-  })
-}`);
-      }
-    }
-  }
-
-  return blocks;
-}
-
 function generateOutputsTf(activeNodes: CloudNode[], envId: EnvironmentId): string {
   const lines: string[] = [
     `# ============================================================================
@@ -1869,7 +1931,7 @@ function generateOutputsTf(activeNodes: CloudNode[], envId: EnvironmentId): stri
   return lines.join('\n\n') + '\n';
 }
 
-function generateEmulatorDockerfile(): string {
+function generateEmulatorDockerfile(allEnvs: Record<EnvironmentId, EnvironmentProfile>): string {
   return `# ============================================================================
 # AWS Emulator Official Container Image (https://github.com/aws/aws-emulator)
 # Supports x86_64 and Apple Silicon (aarch64)
@@ -1881,7 +1943,7 @@ RUN rpm -i /tmp/aws-emulator.rpm && rm /tmp/aws-emulator.rpm \\
     && mkdir -p /home/emulator && chown 1000 /home/emulator
 USER 1000
 ENV HOME=/home/emulator
-EXPOSE 9297 9298 9299 9300
+EXPOSE ${Object.values(allEnvs).map((e) => e.emulatorPort).join(' ')}
 ENTRYPOINT ["aws-emulator", "-b", "0.0.0.0"]
 `;
 }
@@ -1915,7 +1977,7 @@ function generateDockerComposeYml(
     .join('\n\n');
 
   return `# ============================================================================
-# Multi-Environment AWS Emulator Cluster (dev, testing, staging, prod)
+# Multi-Environment AWS Emulator Cluster (${Object.keys(allEnvs).join(', ')})
 # Each environment runs an isolated in-memory AWS Emulator on its dedicated port
 # ============================================================================
 services:

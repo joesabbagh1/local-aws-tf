@@ -1,21 +1,20 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, CheckCircle2, Download, RotateCcw } from 'lucide-react';
 import { useCloudStore } from '../store/useCloudStore';
-import { DEFAULT_ENVIRONMENTS, SERVICE_BY_TYPE } from '../data/awsCatalog';
+import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import type { AwsCategory, CostDriver, EnvironmentId, UsageProfile } from '../types/cloud';
 import {
   COST_DRIVERS,
-  ENV_IDS,
   costEstimateCsv,
   estimateArchitectureCosts,
   findCostSavings,
   projectMonthlyCost,
   usageFor,
 } from '../utils/costEstimator';
+import { envIdsOf, envLabel } from '../utils/environments';
 import { DriverLegend, StackedBarList, StackedColumns, usd, type BarRow } from './costCharts';
 import { Button, EnvDot, Segmented, ServiceGlyph, Switch, cn, fieldCls } from './ui';
 
-const envLabel = (id: EnvironmentId) => (id === 'testing' ? 'test' : id);
 
 const GROWTH_OPTIONS = [
   { value: '0', label: 'Flat' },
@@ -87,6 +86,7 @@ export function CostAnalyticsView() {
   const [showFree, setShowFree] = useState(false);
   const [showAllSavings, setShowAllSavings] = useState(false);
 
+  const ENV_IDS = useMemo(() => envIdsOf(environments), [environments]);
   const estimate = useMemo(() => estimateArchitectureCosts(nodes, environments), [nodes, environments]);
   const savings = useMemo(() => findCostSavings(nodes, estimate), [nodes, estimate]);
 
@@ -94,6 +94,7 @@ export function CostAnalyticsView() {
   const total = estimate.totalsByEnv[activeEnv];
   const allEnvTotal = ENV_IDS.reduce((sum, id) => sum + estimate.totalsByEnv[id], 0);
   const savingsTotal = savings.reduce((sum, s) => sum + s.monthlyUsd, 0);
+  const productionTotal = estimate.productionEnvIds.reduce((sum, id) => sum + estimate.totalsByEnv[id], 0);
   const largest = [...estimate.items].sort((a, b) => b.monthlyUsd[activeEnv] - a.monthlyUsd[activeEnv])[0];
   const pricedCount = estimate.items.filter((i) => i.monthlyUsd[activeEnv] > 0).length;
 
@@ -175,7 +176,7 @@ export function CostAnalyticsView() {
     updateEnvironmentProfile(envId, { usage: { ...usageFor(environments[envId], envId), [key]: value } });
   };
   const usageIsDefault = ENV_IDS.every((id) =>
-    USAGE_FIELDS.every(({ key }) => usageFor(environments[id], id)[key] === DEFAULT_ENVIRONMENTS[id].usage[key])
+    USAGE_FIELDS.every(({ key }) => usageFor(environments[id], id)[key] === usageFor(undefined, id)[key])
   );
 
   if (nodes.length === 0) {
@@ -224,8 +225,8 @@ export function CostAnalyticsView() {
           <StatTile
             label="All environments per month"
             value={usd(allEnvTotal)}
-            sub={`${usd(allEnvTotal * 12)} per year · prod is ${
-              allEnvTotal > 0 ? Math.round((estimate.totalsByEnv.prod / allEnvTotal) * 100) : 0
+            sub={`${usd(allEnvTotal * 12)} per year · production is ${
+              allEnvTotal > 0 ? Math.round((productionTotal / allEnvTotal) * 100) : 0
             }%`}
           />
           <StatTile
@@ -429,7 +430,7 @@ export function CostAnalyticsView() {
               <Button
                 variant="ghost"
                 disabled={usageIsDefault}
-                onClick={() => ENV_IDS.forEach((id) => updateEnvironmentProfile(id, { usage: { ...DEFAULT_ENVIRONMENTS[id].usage } }))}
+                onClick={() => ENV_IDS.forEach((id) => updateEnvironmentProfile(id, { usage: usageFor(undefined, id) }))}
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 Reset

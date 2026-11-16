@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { DEFAULT_ENVIRONMENTS } from '../src/data/awsCatalog';
 import type { CloudEdge, CloudNode, EnvironmentId } from '../src/types/cloud';
 import { summarizePlan, type PlanResourceChange } from '../src/utils/planSummary';
+import { resolveEnvironments } from '../src/utils/environments';
+import { explorerOperationsSummary } from '../src/utils/explorerOps';
 import { version } from '../package.json';
 
 /**
@@ -115,17 +116,13 @@ class Backend {
   }
 }
 
-const ENV_IDS = ['dev', 'testing', 'staging', 'prod'] as const;
-
 /**
- * Environment profile for port/region lookups. Designs created headlessly (resource_add on an
- * empty project) may carry no environments section — the app defaults fill in ports 9297-9300.
+ * Environment profile for port/region lookups. A project's environments are its own (the four
+ * defaults unless it added or removed some); a design created headlessly may carry none yet, in
+ * which case the defaults apply.
  */
 function envProfile(doc: any, env: string): { emulatorPort: number; region: string } | undefined {
-  const fallback = (DEFAULT_ENVIRONMENTS as Record<string, any>)[env];
-  const saved = doc?.environments?.[env];
-  if (!fallback && !saved) return undefined;
-  return { ...fallback, ...saved };
+  return resolveEnvironments(doc?.environments)[env];
 }
 
 export async function runMcpServer(argv: string[]): Promise<void> {
@@ -148,7 +145,9 @@ export async function runMcpServer(argv: string[]): Promise<void> {
 
   const ACTOR = 'mcp';
   const projectId = z.string().optional().describe('Optional project id (defaults to the --project / server default project)');
-  const envField = z.enum(ENV_IDS);
+  const envField = z
+    .string()
+    .describe("Environment id: dev, testing, staging or prod by default, plus any the project added (see project_get)");
 
   const designOp = (op: string) => async (args: Record<string, any>) => {
     // resolveProject, not projectDoc: template_apply / resource_add / import_terraform must be
@@ -234,7 +233,9 @@ export async function runMcpServer(argv: string[]): Promise<void> {
     return {
       project: { id: project.id, name: project.name, workingDir: project.working_dir },
       version,
-      environments: doc.environments,
+        environments: Object.fromEntries(
+        Object.values(resolveEnvironments(doc.environments)).map((e) => [e.id, { name: e.name, region: e.region, emulatorPort: e.emulatorPort, production: e.production ?? e.id === 'prod', usage: e.usage }])
+      ),
       nodes: (doc.nodes as CloudNode[]).map((n) => ({
         id: n.id,
         label: n.data.label,
@@ -251,12 +252,13 @@ export async function runMcpServer(argv: string[]): Promise<void> {
         to: e.target,
         relationshipType: e.data?.relationshipType,
       })),
+      scenarios: ((doc.scenarios ?? []) as { id: string; name: string; steps: unknown[] }[]).map((sc) => ({ id: sc.id, name: sc.name, steps: sc.steps.length })),
     };
   });
 
   register('catalog_list', {
     description:
-      'The AWS service catalog: every service with its field schema (key, type, default, options), emulator support level, and the blueprint templates.',
+      'The AWS service catalog: every service with its field schema (key, type, default, options), emulator support level, and the blueprint templates. A service with `deprecated` set can\'t be added; the text says what to use instead.',
     inputSchema: {},
   }, () => api.json('/api/catalog'));
 
@@ -406,8 +408,15 @@ export async function runMcpServer(argv: string[]): Promise<void> {
 
   register('emulator_status', {
     description: 'Health of the emulator ports (one container per environment).',
-    inputSchema: { ports: z.string().optional().describe('Comma-separated, default all four env ports') },
-  }, (args: Record<string, any>) => api.json(`/api/emulator/status?ports=${args.ports || '9297,9298,9299,9300'}`));
+    inputSchema: { ports: z.string().optional().describe("Comma-separated ports; default every environment of the project"), projectId },
+  }, async (args: Record<string, any>) => {
+    if (args.ports) return api.json(`/api/emulator/status?ports=${args.ports}`);
+    const doc = await api.projectDoc(args.projectId).then((p) => p.doc, () => null);
+    const environments = resolveEnvironments(doc?.environments);
+    const ports = Object.values(environments).map((e) => e.emulatorPort);
+    const { statuses } = await api.json<{ statuses: Record<string, unknown> }>(`/api/emulator/status?ports=${ports.join(',')}`);
+    return { environments: Object.fromEntries(Object.values(environments).map((e) => [e.id, { port: e.emulatorPort, ...(statuses[e.emulatorPort] as object) }])) };
+  });
 
   register('emulator_start', {
     description: 'Start the AWS Emulator container for one environment (needs Docker).',
@@ -442,8 +451,9 @@ export async function runMcpServer(argv: string[]): Promise<void> {
   }, async (args: Record<string, any>) => {
     const id = await api.resolveProject(args.projectId);
     if (args.env) return api.json(`/api/projects/${id}/terraform/state?envId=${args.env}`);
+    const doc = await api.projectDoc(args.projectId).then((p) => p.doc, () => null);
     const all = await Promise.all(
-      ENV_IDS.map(async (env) => [env, await api.json(`/api/projects/${id}/terraform/state?envId=${env}`)])
+      Object.keys(resolveEnvironments(doc?.environments)).map(async (env) => [env, await api.json(`/api/projects/${id}/terraform/state?envId=${env}`)])
     );
     return Object.fromEntries(all);
   });
@@ -451,35 +461,136 @@ export async function runMcpServer(argv: string[]): Promise<void> {
   // ── data plane ──────────────────────────────────────────────────────────────────────────
   register('explore', {
     description:
-      'Poke the deployed resources on the emulator: s3 list_buckets/list_objects/put_object/get_object, dynamodb list_tables/scan/put_item, sqs list_queues/send_message/receive_message, lambda list_functions/invoke.',
+      `Use the deployed resources on an environment's emulator. Operations per service — ${explorerOperationsSummary()}. Every service also has "list" (deployed resources with the target each operation takes). Name the resource by canvas id (resource) or by its live target.`,
     inputSchema: {
-      service: z.enum(['s3', 'dynamodb', 'sqs', 'lambda']),
+      service: z.string().describe('apigateway, lambda, sqs, sns, events, kinesis, sfn, s3, dynamodb or logs'),
       operation: z.string(),
-      target: z.string().optional().describe('Bucket / table / queue / function name, where applicable'),
-      input: z.record(z.string(), z.unknown()).optional().describe('Operation input (e.g. {message, queueUrl}, {payload})'),
-      env: envField.optional().describe("Which environment's emulator (default dev)"),
+      resource: z.string().optional().describe('Canvas resource id (from project_get); resolved to the deployed resource'),
+      target: z.string().optional().describe('Live target instead of resource: API id, function / bucket / table / stream / bus name, queue URL, topic or state machine ARN, log group'),
+      input: z.record(z.string(), z.unknown()).optional().describe('Operation input, e.g. {method, path, body} for apigateway request, {event} for lambda invoke, {body} for sqs send_message, {item} for dynamodb put_item (plain JSON)'),
+      env: envField.optional().describe("Which environment's emulator (default: the project's first)"),
       projectId,
     },
-  }, async (args: Record<string, any>) => {
-    const env: string = ENV_IDS.includes(args.env) ? args.env : 'dev';
-    const { doc } = await api.projectDoc(args.projectId);
-    const profile = envProfile(doc, env);
-    if (!profile) throw new ApiError(`No environment profile for ${env}`, 400);
-    const port = profile.emulatorPort;
-    const region = profile.region;
-    return api.json('/api/emulator/explore', {
+  }, async (args: Record<string, any>) =>
+    api.json('/api/emulator/explore', {
       method: 'POST',
       body: JSON.stringify({
-        port,
-        region,
+        projectId: await api.resolveProject(args.projectId),
+        envId: args.env,
         service: args.service,
         operation: args.operation,
+        nodeId: args.resource,
         target: args.target || '',
         input: args.input && typeof args.input === 'object' ? args.input : {},
         actor: ACTOR,
       }),
-    });
+    })
+  );
+
+  // ── scenarios: saved end-to-end checks ──────────────────────────────────────────────────
+  const scenarioStep = z.object({
+    service: z.string(),
+    operation: z.string(),
+    nodeId: z.string().optional().describe('Canvas resource id the step acts on'),
+    input: z.record(z.string(), z.unknown()).optional(),
+    expect: z
+      .object({
+        contains: z.array(z.string()).optional().describe('Every string must appear in the JSON result'),
+        notContains: z.array(z.string()).optional(),
+        status: z.number().optional().describe('HTTP status, for apigateway request'),
+      })
+      .optional(),
+    retrySeconds: z.number().optional().describe('For read operations: repeat until the expectation holds, at most this long (asynchronous flows)'),
   });
+
+  register('scenarios_list', {
+    description: 'Scenarios saved with the project: named lists of steps (an explore operation plus what to expect) that check the deployed architecture end to end.',
+    inputSchema: { projectId },
+  }, async (args: Record<string, any>) => ({ scenarios: (await api.projectDoc(args.projectId)).doc.scenarios ?? [] }));
+
+  register('scenario_save', {
+    description:
+      'Create a scenario, or replace one by id. Steps run in order and stop at the first failure. Typical shape: send something in (apigateway request, sqs send_message, sns publish, events put_events…), then read where it should land (dynamodb get_item / scan, s3 get_object, lambda logs) with expect + retrySeconds.',
+    inputSchema: {
+      scenario: z.object({ id: z.string().optional(), name: z.string(), steps: z.array(scenarioStep) }),
+      projectId,
+    },
+  }, designOp('scenario.save'));
+
+  register('scenario_remove', {
+    description: 'Delete a scenario by id.',
+    inputSchema: { id: z.string(), projectId },
+  }, designOp('scenario.remove'));
+
+  register('scenario_run', {
+    description:
+      "Run one scenario (by id or name) or all of them against an environment's emulator. Returns pass/fail per step with the output that failed. The environment must be applied and its emulator running.",
+    inputSchema: { scenario: z.string().optional().describe('Scenario id or name; omit to run all'), env: envField.optional(), projectId },
+  }, async (args: Record<string, any>) => {
+    const id = await api.resolveProject(args.projectId);
+    // A failing scenario is a result, not a tool error: return it whole
+    const res = await fetch(`${opts.url}/api/projects/${id}/scenarios/run`, {
+      method: 'POST',
+      headers: api.headers(),
+      body: JSON.stringify({ envId: args.env, scenarioId: args.scenario, actor: ACTOR }),
+    });
+    const data = (await res.json().catch(() => ({ error: `HTTP ${res.status}` }))) as { results?: unknown; error?: string };
+    if (!data.results) throw new ApiError(data.error || `HTTP ${res.status}`, res.status);
+    return data;
+  });
+
+  // ── environments ────────────────────────────────────────────────────────────────────────
+  register('environment_add', {
+    description:
+      "Add an environment to the project (it gets its own emulator port, Terraform folder and state). copyFrom starts it as a copy of another environment's region, usage and per-resource overrides.",
+    inputSchema: {
+      id: z.string().describe('Lowercase letters, digits and hyphens, up to 16 characters, e.g. qa or perf'),
+      name: z.string().optional(),
+      region: z.string().optional(),
+      copyFrom: z.string().optional(),
+      projectId,
+    },
+  }, designOp('environment.add'));
+
+  register('environment_update', {
+    description: "Change an environment's name, region, emulator port, production flag (stricter audit checks) or usage assumptions for the cost estimate.",
+    inputSchema: {
+      id: z.string(),
+      name: z.string().optional(),
+      region: z.string().optional(),
+      emulatorPort: z.number().optional(),
+      production: z.boolean().optional(),
+      usage: z
+        .object({ requestsMillions: z.number().optional(), dataTransferGb: z.number().optional(), storageGb: z.number().optional(), logsGb: z.number().optional() })
+        .optional(),
+      projectId,
+    },
+  }, designOp('environment.update'));
+
+  register('environment_remove', {
+    description: "Remove an environment and every resource's overrides for it. Destroy it first: its Terraform state stays on disk but nothing manages it afterwards.",
+    inputSchema: { id: z.string(), projectId },
+  }, designOp('environment.remove'));
+
+  // ── history ─────────────────────────────────────────────────────────────────────────────
+  register('runs_list', {
+    description: 'Terraform and scenario runs for the project, newest first: command, environment, status, who ran it, the design version, and plan totals.',
+    inputSchema: { env: envField.optional(), limit: z.number().optional(), projectId },
+  }, async (args: Record<string, any>) =>
+    api.json(`/api/projects/${await api.resolveProject(args.projectId)}/runs?limit=${args.limit ?? 20}${args.env ? `&env=${args.env}` : ''}`)
+  );
+
+  register('run_get', {
+    description: 'One run with its full output and, for a plan, the per-resource changes.',
+    inputSchema: { id: z.number(), projectId },
+  }, async (args: Record<string, any>) => api.json(`/api/projects/${await api.resolveProject(args.projectId)}/runs/${args.id}`));
+
+  register('events_list', {
+    description: 'The audit trail: design operations, syncs, emulator starts and stops, restores and scenario runs, with who did them.',
+    inputSchema: { limit: z.number().optional(), projectId },
+  }, async (args: Record<string, any>) =>
+    api.json(`/api/projects/${await api.resolveProject(args.projectId)}/events?limit=${args.limit ?? 50}`)
+  );
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

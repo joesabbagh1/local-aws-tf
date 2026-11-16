@@ -1,281 +1,289 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useCloudStore } from '../store/useCloudStore';
-import { sanitizeIdentifier } from '../utils/terraformCompiler';
-import { AwsServiceIcon } from './AwsServiceIcon';
-import { Button, IconButton, Section, Segmented, cn, monoFieldCls } from './ui';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
-import { Loader2, RefreshCw, Send, Upload, Inbox, Search, Zap, AlertTriangle } from 'lucide-react';
-
-type ExplorerService = 's3' | 'dynamodb' | 'sqs' | 'lambda';
-
-const SERVICES: { id: ExplorerService; label: string; nodeType: string; listOp: string }[] = [
-  { id: 's3', label: 'S3', nodeType: 'aws_s3_bucket', listOp: 'list_buckets' },
-  { id: 'dynamodb', label: 'DynamoDB', nodeType: 'aws_dynamodb_table', listOp: 'list_tables' },
-  { id: 'sqs', label: 'SQS', nodeType: 'aws_sqs_queue', listOp: 'list_queues' },
-  { id: 'lambda', label: 'Lambda', nodeType: 'aws_lambda_function', listOp: 'list_functions' },
-];
+import {
+  EXPLORER_SERVICES,
+  EXPLORER_SERVICE_BY_ID,
+  EXPLORER_SERVICE_BY_NODE_TYPE,
+  buildExplorerInput,
+  explorerOperation,
+  type ExplorerOperation,
+} from '../utils/explorerOps';
+import { liveResourceName } from '../utils/terraformNames';
+import { envLabel } from '../utils/environments';
+import type { Scenario, ScenarioStep, ScenarioStepResult } from '../utils/scenarios';
+import type { CloudNode } from '../types/cloud';
+import { AlertTriangle, CheckCircle2, Loader2, Play, Plus, Trash2, X, XCircle } from 'lucide-react';
+import { Button, EnvDot, IconButton, Section, Segmented, cn, fieldCls, monoFieldCls } from './ui';
 
 interface ExploreResult {
   ok: boolean;
   emulatorOnline?: boolean;
-  cliCommand?: string;
   data?: any;
   error?: string;
 }
 
-function extractResourceNames(service: ExplorerService, data: any): string[] {
-  if (!data || typeof data !== 'object') return [];
-  if (service === 's3') return (data.Buckets || []).map((b: any) => b.Name);
-  if (service === 'dynamodb') return data.TableNames || [];
-  if (service === 'sqs') return data.QueueUrls || [];
-  return (data.Functions || []).map((f: any) => f.FunctionName);
+const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+/** One line describing what a step does, for the scenario list. */
+function stepTitle(step: ScenarioStep, nodes: CloudNode[]): string {
+  const op = explorerOperation(step.service, step.operation);
+  const svc = EXPLORER_SERVICE_BY_ID[step.service];
+  const node = nodes.find((n) => n.id === step.nodeId);
+  return `${op?.label ?? step.operation} · ${node?.data.label ?? svc?.label ?? step.service}`;
 }
 
-/** Converts plain JSON into DynamoDB attribute-value JSON so users can type natural items. */
-function toDynamoAttribute(value: unknown): Record<string, unknown> {
-  if (value === null || value === undefined) return { NULL: true };
-  if (typeof value === 'string') return { S: value };
-  if (typeof value === 'number') return { N: String(value) };
-  if (typeof value === 'boolean') return { BOOL: value };
-  if (Array.isArray(value)) return { L: value.map(toDynamoAttribute) };
-  return {
-    M: Object.fromEntries(Object.entries(value as object).map(([k, v]) => [k, toDynamoAttribute(v)])),
-  };
+/** Log events read better as lines than as JSON. */
+function ResultBody({ data }: { data: any }) {
+  if (data && Array.isArray(data.events) && typeof data.logGroup === 'string') {
+    return (
+      <div className="rounded-md border border-line bg-base p-3 font-mono text-[12.5px] leading-relaxed max-h-80 overflow-y-auto select-text">
+        <div className="text-fg-faint mb-1.5">{data.logGroup}</div>
+        {data.events.length === 0 ? (
+          <div className="text-fg-faint">{data.note || 'No log lines in this window.'}</div>
+        ) : (
+          data.events.map((e: { time: string; message: string }, i: number) => (
+            <div key={i} className="whitespace-pre-wrap break-words text-fg/90">
+              <span className="text-fg-faint">{e.time.slice(11, 19)} </span>
+              {e.message}
+            </div>
+          ))
+        )}
+      </div>
+    );
+  }
+  return (
+    <pre className="rounded-md border border-line bg-base p-3 font-mono text-[12.5px] leading-relaxed text-fg/90 overflow-x-auto max-h-80 select-text whitespace-pre-wrap break-words">
+      {JSON.stringify(data, null, 2)}
+    </pre>
+  );
 }
 
-export function ResourceExplorerPanel() {
+function OperationForm({
+  operation,
+  values,
+  onChange,
+}: {
+  operation: ExplorerOperation;
+  values: Record<string, string>;
+  onChange: (key: string, value: string) => void;
+}) {
+  if (operation.inputs.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {operation.inputs.map((field) => {
+        const value = values[field.key] ?? field.defaultValue ?? '';
+        return (
+          <label key={field.key} className="block">
+            <span className="block text-[12.5px] text-fg-muted mb-1">{field.label}</span>
+            {field.kind === 'text' ? (
+              <input
+                type="text"
+                value={value}
+                placeholder={field.placeholder}
+                spellCheck={false}
+                onChange={(e) => onChange(field.key, e.target.value)}
+                className={monoFieldCls}
+              />
+            ) : (
+              <textarea
+                rows={field.kind === 'json' ? 4 : 3}
+                value={value}
+                placeholder={field.placeholder}
+                spellCheck={false}
+                onChange={(e) => onChange(field.key, e.target.value)}
+                className={cn(monoFieldCls, 'resize-y leading-relaxed')}
+              />
+            )}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================================
+// Explore: one operation against one deployed resource
+// ============================================================================
+function ExplorePane({ onAddedStep }: { onAddedStep: () => void }) {
   const nodes = useCloudStore((s) => s.nodes);
   const selectedNodeId = useCloudStore((s) => s.selectedNodeId);
   const activeEnv = useCloudStore((s) => s.activeEnv);
-  const environments = useCloudStore((s) => s.environments);
-  const env = environments[activeEnv];
+  const activeProject = useCloudStore((s) => s.activeProject);
+  const scenarios = useCloudStore((s) => s.scenarios);
+  const saveScenario = useCloudStore((s) => s.saveScenario);
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
-  const nodeService = SERVICES.find((s) => s.nodeType === selectedNode?.data.serviceType);
+  const preferred = selectedNode ? EXPLORER_SERVICE_BY_NODE_TYPE[selectedNode.data.serviceType] : undefined;
 
-  const [service, setService] = useState<ExplorerService>(nodeService?.id || 's3');
-  const [resources, setResources] = useState<string[]>([]);
-  const [target, setTarget] = useState('');
-  const [listing, setListing] = useState<ExploreResult | null>(null);
+  const [serviceId, setServiceId] = useState(preferred?.id ?? 'apigateway');
+  const service = EXPLORER_SERVICE_BY_ID[serviceId];
+  const candidates = nodes.filter((n) => n.data.serviceType === service.nodeType);
+  const [nodeId, setNodeId] = useState<string>('');
+  const [operationId, setOperationId] = useState(service.operations[0].id);
+  const [values, setValues] = useState<Record<string, Record<string, string>>>({});
   const [result, setResult] = useState<ExploreResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [target, setTarget] = useState<string>('');
 
-  const [objectKey, setObjectKey] = useState('hello.txt');
-  const [objectBody, setObjectBody] = useState('Hello from LocalCloud Studio');
-  const [itemJson, setItemJson] = useState('{\n  "pk": "order#1001",\n  "status": "PENDING"\n}');
-  const [messageBody, setMessageBody] = useState('{"orderId":"1001"}');
-  const [eventJson, setEventJson] = useState('{\n  "ping": "hello"\n}');
+  // Follow the canvas selection
+  useEffect(() => {
+    if (!preferred) return;
+    setServiceId(preferred.id);
+    setNodeId(selectedNode!.id);
+  }, [preferred?.id, selectedNode?.id]);
 
   useEffect(() => {
-    if (nodeService) setService(nodeService.id);
-  }, [nodeService?.id]);
-
-  const explore = useCallback(
-    async (
-      operation: string,
-      opts: { target?: string; input?: Record<string, unknown> } = {}
-    ): Promise<ExploreResult> => {
-      setBusy(true);
-      try {
-        const res = await fetch('/api/emulator/explore', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            port: env.emulatorPort,
-            region: env.region,
-            service,
-            operation,
-            target: opts.target ?? target,
-            input: opts.input,
-          }),
-        });
-        return (await res.json()) as ExploreResult;
-      } catch (err: any) {
-        return { ok: false, error: err?.message || 'Request failed' };
-      } finally {
-        setBusy(false);
-      }
-    },
-    [env.emulatorPort, env.region, service, target]
-  );
-
-  // Resource name the canvas node compiles to, used to preselect the matching live resource
-  const preferredMatch = useMemo(() => {
-    if (!selectedNode || nodeService?.id !== service) return null;
-    return sanitizeIdentifier(selectedNode.data.resourceName || selectedNode.data.label).replace(/_/g, '-');
-  }, [selectedNode, nodeService, service]);
-
-  const refreshList = useCallback(async () => {
-    const svc = SERVICES.find((s) => s.id === service)!;
-    const res = await explore(svc.listOp, { target: '' });
-    setListing(res);
-    const names = res.ok ? extractResourceNames(service, res.data) : [];
-    setResources(names);
-    const match =
-      (preferredMatch && names.find((n) => n.toLowerCase().includes(preferredMatch))) || names[0] || '';
-    setTarget(match);
+    if (!service.operations.some((op) => op.id === operationId)) setOperationId(service.operations[0].id);
+    if (!candidates.some((n) => n.id === nodeId)) setNodeId(candidates[0]?.id ?? '');
     setResult(null);
-  }, [explore, service, preferredMatch]);
-
-  useEffect(() => {
-    refreshList();
-    // Re-list whenever the service or environment changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [service, activeEnv]);
+  }, [serviceId, candidates.length]);
 
-  const run = async (operation: string, input?: Record<string, unknown>) => {
-    setResult(await explore(operation, { input }));
-  };
+  const operation = service.operations.find((op) => op.id === operationId) ?? service.operations[0];
+  const node = candidates.find((n) => n.id === nodeId);
+  const valueKey = `${service.id}:${operation.id}`;
+  const opValues = values[valueKey] ?? {};
+  const offInEnv = node?.data.envEnabled?.[activeEnv] === false;
 
-  const putItem = () => {
+  const run = async () => {
+    if (!activeProject || !node) return;
+    const built = buildExplorerInput(operation, opValues);
+    if ('invalid' in built) {
+      setResult({ ok: false, error: `${built.invalid} must be valid JSON` });
+      return;
+    }
+    setBusy(true);
     try {
-      const plain = JSON.parse(itemJson);
-      const item = Object.fromEntries(
-        Object.entries(plain).map(([k, v]) => [k, toDynamoAttribute(v)])
-      );
-      run('put_item', { item });
-    } catch {
-      setResult({ ok: false, error: 'Item must be valid JSON' });
+      const res = await fetch('/api/emulator/explore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: activeProject.id,
+          envId: activeEnv,
+          service: service.id,
+          operation: operation.id,
+          nodeId: node.id,
+          input: built.input,
+        }),
+      });
+      setResult((await res.json()) as ExploreResult);
+    } catch (err: any) {
+      setResult({ ok: false, error: err?.message || 'Request failed' });
+    } finally {
+      setBusy(false);
     }
   };
 
-  const invoke = () => {
-    try {
-      run('invoke', { event: JSON.parse(eventJson) });
-    } catch {
-      setResult({ ok: false, error: 'Event must be valid JSON' });
+  const addToScenario = () => {
+    if (!node) return;
+    const built = buildExplorerInput(operation, opValues);
+    if ('invalid' in built) {
+      setResult({ ok: false, error: `${built.invalid} must be valid JSON` });
+      return;
     }
+    const step: ScenarioStep = {
+      id: newId('st'),
+      service: service.id,
+      operation: operation.id,
+      nodeId: node.id,
+      ...(Object.keys(built.input).length ? { input: built.input } : {}),
+      // A read waits a little for asynchronous flows to land by default
+      ...(operation.reads ? { retrySeconds: 10 } : {}),
+    };
+    const existing = scenarios.find((sc) => sc.id === target);
+    saveScenario(
+      existing
+        ? { ...existing, steps: [...existing.steps, step] }
+        : { id: newId('sc'), name: `Scenario ${scenarios.length + 1}`, steps: [step] }
+    );
+    onAddedStep();
   };
 
-  const offline = listing?.emulatorOnline === false;
+  if (!activeProject) {
+    return (
+      <Section>
+        <p className="text-xs text-fg-muted">The Data tab needs the local backend, which runs the emulator.</p>
+      </Section>
+    );
+  }
 
   return (
     <>
       <Section>
-        <Segmented
-          value={service}
-          onChange={setService}
-          options={SERVICES.map((s) => {
-            const meta = SERVICE_BY_TYPE[s.nodeType];
-            return {
-              value: s.id,
-              label: (
-                <>
-                  <span style={{ color: meta?.color }}>
-                    <AwsServiceIcon iconName={meta?.iconName || 'Box'} className="w-3 h-3" />
-                  </span>
-                  {s.label}
-                </>
-              ),
-            };
-          })}
-        />
-      </Section>
-
-      {/* Live resource picker */}
-      <Section
-        title={
-          <>
-            Live on <span className="font-mono">:{env.emulatorPort}</span> · {activeEnv}
-          </>
-        }
-        aside={
-          <IconButton onClick={refreshList} disabled={busy} title="Refresh" className="-mr-1.5">
-            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-          </IconButton>
-        }
-      >
-        {offline ? (
-          <p className="text-xs text-warn flex gap-2 leading-relaxed">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>{listing?.error}</span>
-          </p>
-        ) : resources.length === 0 ? (
-          <p className="text-xs text-fg-faint leading-relaxed">
-            {listing?.ok === false
-              ? listing.error
-              : `No ${SERVICES.find((s) => s.id === service)?.label} resources yet. Apply ${activeEnv} first.`}
-          </p>
-        ) : (
-          <select
-            value={target}
-            onChange={(e) => {
-              setTarget(e.target.value);
-              setResult(null);
-            }}
-            className={monoFieldCls}
-          >
-            {resources.map((r) => (
-              <option key={r} value={r}>
-                {r}
+        <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-2.5 items-center">
+          <span className="text-xs text-fg-muted">Service</span>
+          <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} className={fieldCls} aria-label="Service">
+            {EXPLORER_SERVICES.map((svc) => (
+              <option key={svc.id} value={svc.id}>
+                {svc.label}
               </option>
             ))}
           </select>
-        )}
-
-        {/* Per-service operations */}
-        {target && !offline && (
-          <div className="mt-4 space-y-2">
-            {service === 's3' && (
-              <>
-                <div className="flex gap-1.5">
-                  <input value={objectKey} onChange={(e) => setObjectKey(e.target.value)} placeholder="Object key" className={monoFieldCls} />
-                  <Button onClick={() => run('get_object', { key: objectKey })}>Get</Button>
-                  <Button onClick={() => run('list_objects')}>
-                    <Search className="w-3 h-3" /> List
-                  </Button>
-                </div>
-                <textarea rows={3} value={objectBody} onChange={(e) => setObjectBody(e.target.value)} className={monoFieldCls} />
-                <Button variant="primary" onClick={() => run('put_object', { key: objectKey, body: objectBody })}>
-                  <Upload className="w-3 h-3" /> Upload {objectKey || 'object'}
-                </Button>
-              </>
-            )}
-
-            {service === 'dynamodb' && (
-              <>
-                <textarea rows={5} value={itemJson} onChange={(e) => setItemJson(e.target.value)} className={monoFieldCls} />
-                <p className="text-[12.5px] text-fg-faint">
-                  Plain JSON is converted to DynamoDB attribute values. Include the table's key attributes.
-                </p>
-                <div className="flex gap-1.5">
-                  <Button variant="primary" onClick={putItem}>
-                    <Upload className="w-3 h-3" /> Put item
-                  </Button>
-                  <Button onClick={() => run('scan')}>
-                    <Search className="w-3 h-3" /> Scan
-                  </Button>
-                </div>
-              </>
-            )}
-
-            {service === 'sqs' && (
-              <>
-                <textarea rows={3} value={messageBody} onChange={(e) => setMessageBody(e.target.value)} className={monoFieldCls} />
-                <div className="flex gap-1.5">
-                  <Button variant="primary" onClick={() => run('send_message', { body: messageBody })}>
-                    <Send className="w-3 h-3" /> Send
-                  </Button>
-                  <Button onClick={() => run('receive_message')}>
-                    <Inbox className="w-3 h-3" /> Receive
-                  </Button>
-                </div>
-              </>
-            )}
-
-            {service === 'lambda' && (
-              <>
-                <textarea rows={5} value={eventJson} onChange={(e) => setEventJson(e.target.value)} className={monoFieldCls} />
-                <Button variant="primary" onClick={invoke}>
-                  <Zap className="w-3 h-3" /> Invoke
-                </Button>
-              </>
-            )}
-          </div>
+          <span className="text-xs text-fg-muted">Resource</span>
+          {candidates.length === 0 ? (
+            <span className="text-xs text-fg-faint">No {SERVICE_BY_TYPE[service.nodeType]?.shortName ?? service.label} on the canvas</span>
+          ) : (
+            <select value={nodeId} onChange={(e) => setNodeId(e.target.value)} className={fieldCls} aria-label="Resource">
+              {candidates.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.data.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        {node && (
+          <p className={cn('mt-2 text-[12.5px] font-mono truncate', offInEnv ? 'text-warn' : 'text-fg-faint')}>
+            {offInEnv ? `Switched off in ${envLabel(activeEnv)}` : `${liveResourceName(node, activeEnv)} in ${envLabel(activeEnv)}`}
+          </p>
         )}
       </Section>
 
-      {/* Result */}
+      {node && !offInEnv && (
+        <Section>
+          {service.operations.length > 1 && (
+            <Segmented
+              value={operation.id}
+              onChange={(id) => {
+                setOperationId(id);
+                setResult(null);
+              }}
+              options={service.operations.map((op) => ({ value: op.id, label: op.label }))}
+              className="mb-3"
+            />
+          )}
+          <OperationForm
+            operation={operation}
+            values={opValues}
+            onChange={(key, value) => setValues((v) => ({ ...v, [valueKey]: { ...opValues, [key]: value } }))}
+          />
+          <div className="mt-3 flex items-center gap-1.5">
+            <Button variant="primary" onClick={run} disabled={busy}>
+              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3 fill-current" />}
+              {operation.label}
+            </Button>
+            <span className="flex-1" />
+            <select
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              aria-label="Scenario to add this step to"
+              className={cn(fieldCls, 'w-[136px]')}
+            >
+              <option value="">New scenario</option>
+              {scenarios.map((sc) => (
+                <option key={sc.id} value={sc.id}>
+                  {sc.name}
+                </option>
+              ))}
+            </select>
+            <Button onClick={addToScenario} title="Save this operation as a scenario step">
+              <Plus className="w-3 h-3" /> Step
+            </Button>
+          </div>
+        </Section>
+      )}
+
       {result && (
         <Section
           title={
@@ -285,13 +293,327 @@ export function ResourceExplorerPanel() {
             </span>
           }
         >
-          {result.cliCommand && (
-            <code className="block mb-2 text-[12.5px] font-mono text-fg-faint break-all select-text">$ {result.cliCommand}</code>
+          {result.ok ? (
+            <ResultBody data={result.data} />
+          ) : (
+            <p className="text-xs text-err flex gap-2 leading-relaxed">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span className="break-words min-w-0">{result.error}</span>
+            </p>
           )}
-          <pre className="rounded-md border border-line bg-base p-3 font-mono text-[12.5px] leading-relaxed text-fg/90 overflow-x-auto max-h-80 select-text">
-            {result.ok ? JSON.stringify(result.data, null, 2) : result.error}
-          </pre>
         </Section>
+      )}
+    </>
+  );
+}
+
+// ============================================================================
+// Scenarios: saved end-to-end checks, run against the active environment
+// ============================================================================
+function StepRow({
+  scenario,
+  step,
+  index,
+  result,
+}: {
+  scenario: Scenario;
+  step: ScenarioStep;
+  index: number;
+  result?: ScenarioStepResult;
+}) {
+  const nodes = useCloudStore((s) => s.nodes);
+  const saveScenario = useCloudStore((s) => s.saveScenario);
+  const operation = explorerOperation(step.service, step.operation);
+  const [open, setOpen] = useState(false);
+
+  const update = (patch: Partial<ScenarioStep>) =>
+    saveScenario({ ...scenario, steps: scenario.steps.map((s) => (s.id === step.id ? { ...s, ...patch } : s)) });
+  const updateExpect = (patch: Partial<NonNullable<ScenarioStep['expect']>>) => {
+    const expect = { ...(step.expect ?? {}), ...patch };
+    for (const key of Object.keys(expect) as (keyof typeof expect)[]) if (expect[key] === undefined) delete expect[key];
+    update({ expect: Object.keys(expect).length ? expect : undefined });
+  };
+  const remove = () => saveScenario({ ...scenario, steps: scenario.steps.filter((s) => s.id !== step.id) });
+  const move = (delta: number) => {
+    const steps = [...scenario.steps];
+    const [taken] = steps.splice(index, 1);
+    steps.splice(Math.max(0, Math.min(steps.length, index + delta)), 0, taken);
+    saveScenario({ ...scenario, steps });
+  };
+
+  const expectation = [
+    step.expect?.status !== undefined && `HTTP ${step.expect.status}`,
+    step.expect?.contains?.length && `contains ${step.expect.contains.map((c) => `“${c}”`).join(', ')}`,
+    step.expect?.notContains?.length && `not ${step.expect.notContains.map((c) => `“${c}”`).join(', ')}`,
+  ].filter(Boolean);
+
+  return (
+    <div className="py-1.5">
+      <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-start gap-2 text-left">
+        <span className="w-4 shrink-0 mt-px">
+          {result ? (
+            result.ok ? (
+              <CheckCircle2 className="w-3.5 h-3.5 text-ok" />
+            ) : (
+              <XCircle className="w-3.5 h-3.5 text-err" />
+            )
+          ) : (
+            <span className="font-mono text-[12.5px] text-fg-faint">{index + 1}</span>
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs text-fg truncate">{stepTitle(step, nodes)}</span>
+          <span className="block text-[12.5px] text-fg-faint truncate">
+            {expectation.length ? `Expect ${expectation.join(', ')}` : 'No expectation: passes if it runs'}
+            {step.retrySeconds ? ` · waits up to ${step.retrySeconds} s` : ''}
+          </span>
+        </span>
+        {result && <span className="text-[12.5px] font-mono text-fg-faint shrink-0">{result.durationMs} ms</span>}
+      </button>
+
+      {result && !result.ok && (
+        <p className="ml-6 mt-1 text-[12.5px] text-err break-words">{result.error || result.failure}</p>
+      )}
+
+      {open && (
+        <div className="ml-6 mt-2 space-y-2">
+          {step.input && Object.keys(step.input).length > 0 && (
+            <dl className="rounded-md border border-line bg-base px-2.5 py-2 font-mono text-[12px] max-h-32 overflow-auto space-y-0.5">
+              {Object.entries(step.input).map(([key, value]) => (
+                <div key={key} className="flex gap-2">
+                  <dt className="text-fg-faint shrink-0">{key}</dt>
+                  <dd className="text-fg-muted break-all min-w-0">{typeof value === 'string' ? value : JSON.stringify(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-2 gap-y-1.5 items-center">
+            <span className="text-[12.5px] text-fg-muted">Contains</span>
+            <input
+              type="text"
+              value={step.expect?.contains?.[0] ?? ''}
+              placeholder='"status":"PAID"'
+              spellCheck={false}
+              onChange={(e) => updateExpect({ contains: e.target.value ? [e.target.value] : undefined })}
+              className={monoFieldCls}
+            />
+            <span className="text-[12.5px] text-fg-muted">Doesn't contain</span>
+            <input
+              type="text"
+              value={step.expect?.notContains?.[0] ?? ''}
+              placeholder="errorMessage"
+              spellCheck={false}
+              onChange={(e) => updateExpect({ notContains: e.target.value ? [e.target.value] : undefined })}
+              className={monoFieldCls}
+            />
+            {step.service === 'apigateway' && (
+              <>
+                <span className="text-[12.5px] text-fg-muted">HTTP status</span>
+                <input
+                  type="number"
+                  value={step.expect?.status ?? ''}
+                  placeholder="200"
+                  onChange={(e) => updateExpect({ status: e.target.value ? Number(e.target.value) : undefined })}
+                  className={monoFieldCls}
+                />
+              </>
+            )}
+            {operation?.reads && (
+              <>
+                <span className="text-[12.5px] text-fg-muted" title="Repeat the read until the expectation holds">
+                  Wait up to (s)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={120}
+                  value={step.retrySeconds ?? 0}
+                  onChange={(e) => update({ retrySeconds: Number(e.target.value) > 0 ? Math.min(Number(e.target.value), 120) : undefined })}
+                  className={monoFieldCls}
+                />
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {scenario.steps.length > 1 && (
+              <>
+                <Button variant="ghost" disabled={index === 0} onClick={() => move(-1)}>
+                  Move up
+                </Button>
+                <Button variant="ghost" disabled={index === scenario.steps.length - 1} onClick={() => move(1)}>
+                  Move down
+                </Button>
+              </>
+            )}
+            <span className="flex-1" />
+            <Button variant="danger" onClick={remove}>
+              <Trash2 className="w-3 h-3" /> Remove step
+            </Button>
+          </div>
+          {result?.output !== undefined && (
+            <details>
+              <summary className="text-[12.5px] text-fg-muted cursor-pointer">
+                Last output{result.attempts > 1 ? ` (${result.attempts} attempts)` : ''}
+              </summary>
+              <div className="mt-1.5">
+                <ResultBody data={result.output} />
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScenariosPane({ onExplore }: { onExplore: () => void }) {
+  const scenarios = useCloudStore((s) => s.scenarios);
+  const scenarioResults = useCloudStore((s) => s.scenarioResults);
+  const runningScenarioId = useCloudStore((s) => s.runningScenarioId);
+  const activeEnv = useCloudStore((s) => s.activeEnv);
+  const environments = useCloudStore((s) => s.environments);
+  const saveScenario = useCloudStore((s) => s.saveScenario);
+  const removeScenario = useCloudStore((s) => s.removeScenario);
+  const runScenario = useCloudStore((s) => s.runScenario);
+
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const run = async (id: string) => {
+    setErrors((e) => ({ ...e, [id]: '' }));
+    const outcome = await runScenario(id);
+    if ('error' in outcome) setErrors((e) => ({ ...e, [id]: outcome.error }));
+  };
+  const runAll = async () => {
+    for (const sc of scenarios) await run(sc.id);
+  };
+
+  const env = environments[activeEnv];
+
+  if (scenarios.length === 0) {
+    return (
+      <Section>
+        <p className="text-xs text-fg-muted leading-relaxed">
+          A scenario checks the deployed architecture end to end: send a request or a message in, then read where it
+          should land. Build steps from the Explore view with <span className="text-fg">+ Step</span>.
+        </p>
+        <Button className="mt-3" onClick={onExplore}>
+          Open Explore
+        </Button>
+      </Section>
+    );
+  }
+
+  return (
+    <>
+      <Section
+        title={
+          <span className="flex items-center gap-1.5">
+            <EnvDot color={env.color} className="w-1.5 h-1.5" />
+            Runs against {env.name}
+          </span>
+        }
+        aside={
+          <Button onClick={runAll} disabled={runningScenarioId !== null} className="-mr-1">
+            <Play className="w-3 h-3 fill-current" /> Run all
+          </Button>
+        }
+      >
+        <p className="text-[12.5px] text-fg-faint">
+          Steps run in order and stop at the first failure. Scenarios are saved with the project and versioned with the design.
+        </p>
+      </Section>
+
+      {scenarios.map((scenario) => {
+        const result = scenarioResults[scenario.id]?.[activeEnv];
+        const running = runningScenarioId === scenario.id;
+        return (
+          <Section key={scenario.id}>
+            <div className="flex items-center gap-1.5 mb-1">
+              {result && (
+                <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', result.ok ? 'bg-ok' : 'bg-err')} title={result.ok ? 'Passed' : 'Failed'} />
+              )}
+              <input
+                type="text"
+                value={scenario.name}
+                aria-label="Scenario name"
+                onChange={(e) => saveScenario({ ...scenario, name: e.target.value })}
+                className="flex-1 min-w-0 bg-transparent text-[14px] text-fg font-medium focus:outline-none border-b border-transparent focus:border-line-strong"
+              />
+              <Button onClick={() => run(scenario.id)} disabled={runningScenarioId !== null || scenario.steps.length === 0}>
+                {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3 fill-current" />}
+                Run
+              </Button>
+              {confirmDelete === scenario.id ? (
+                <>
+                  <Button
+                    variant="danger"
+                    onClick={() => {
+                      removeScenario(scenario.id);
+                      setConfirmDelete(null);
+                    }}
+                  >
+                    Delete
+                  </Button>
+                  <IconButton onClick={() => setConfirmDelete(null)} title="Keep it">
+                    <X className="w-3.5 h-3.5" />
+                  </IconButton>
+                </>
+              ) : (
+                <IconButton variant="danger" onClick={() => setConfirmDelete(scenario.id)} title="Delete scenario">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </IconButton>
+              )}
+            </div>
+            {result && (
+              <p className="text-[12.5px] text-fg-faint mb-1">
+                {result.ok ? 'Passed' : 'Failed'} in {envLabel(result.env)} · {(result.durationMs / 1000).toFixed(1)} s
+              </p>
+            )}
+            {errors[scenario.id] && <p className="text-[12.5px] text-err mb-1 break-words">{errors[scenario.id]}</p>}
+            <div className="divide-y divide-line">
+              {scenario.steps.length === 0 ? (
+                <p className="py-2 text-[12.5px] text-fg-faint">No steps yet. Add them from Explore.</p>
+              ) : (
+                scenario.steps.map((step, i) => (
+                  <StepRow
+                    key={step.id}
+                    scenario={scenario}
+                    step={step}
+                    index={i}
+                    result={result?.steps.find((r) => r.stepId === step.id)}
+                  />
+                ))
+              )}
+            </div>
+          </Section>
+        );
+      })}
+    </>
+  );
+}
+
+export function ResourceExplorerPanel() {
+  const scenarioCount = useCloudStore((s) => s.scenarios.length);
+  const [mode, setMode] = useState<'explore' | 'scenarios'>('explore');
+  const label = useMemo(() => (scenarioCount ? `Scenarios · ${scenarioCount}` : 'Scenarios'), [scenarioCount]);
+
+  return (
+    <>
+      <div className="px-4 pt-3 pb-1">
+        <Segmented
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'explore', label: 'Explore' },
+            { value: 'scenarios', label },
+          ]}
+        />
+      </div>
+      {mode === 'explore' ? (
+        <ExplorePane onAddedStep={() => setMode('scenarios')} />
+      ) : (
+        <ScenariosPane onExplore={() => setMode('explore')} />
       )}
     </>
   );

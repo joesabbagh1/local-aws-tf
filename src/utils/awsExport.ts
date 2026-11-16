@@ -1,11 +1,10 @@
 import type { CloudNode, CloudEdge, EnvironmentId, EnvironmentProfile } from '../types/cloud';
 import { compileTerraformForEnvironment, resolveNodeConfigForEnv, sanitizeIdentifier } from './terraformCompiler';
+import { envIdsOf } from './environments';
 
 export const AWS_EXPORT_DIR = 'terraform-aws';
 /** Files the user is expected to edit; an export never overwrites them once they exist. */
 export const AWS_EXPORT_USER_FILES = ['backend.tfbackend'];
-
-const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 
 export interface AwsExportNote {
   envId: EnvironmentId;
@@ -24,7 +23,7 @@ export function auditAwsExport(
 ): AwsExportNote[] {
   const notes: AwsExportNote[] = [];
 
-  for (const envId of ENV_IDS) {
+  for (const envId of envIdsOf(environments)) {
     const env = environments[envId];
     const compiled = compileTerraformForEnvironment(nodes, edges, env, environments, 'aws');
 

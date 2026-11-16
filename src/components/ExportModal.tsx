@@ -4,8 +4,7 @@ import { auditAwsExport, AWS_EXPORT_DIR, groupAwsExportNotes } from '../utils/aw
 import type { EnvironmentId } from '../types/cloud';
 import { AlertTriangle, CheckCircle2, Loader2, X } from 'lucide-react';
 import { Button, EnvDot, IconButton, cn } from './ui';
-
-const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
+import { envIdsOf, envLabel } from '../utils/environments';
 
 type Status = { kind: 'ok'; written: number; kept: number } | { kind: 'error'; message: string } | null;
 
@@ -29,6 +28,7 @@ export function ExportModal() {
   );
 
   if (!isOpen) return null;
+  const ENV_IDS = envIdsOf(environments);
 
   const close = () => {
     setOpen(false);
@@ -119,7 +119,7 @@ export function ExportModal() {
                       <span className="text-fg-faint">
                         {note.envIds.length === ENV_IDS.length
                           ? 'All environments'
-                          : note.envIds.map((id) => (id === 'testing' ? 'test' : id)).join(', ')}
+                          : note.envIds.map(envLabel).join(', ')}
                         :
                       </span>{' '}
                       <span className="text-fg-muted">{note.message}</span>

@@ -27,6 +27,7 @@ export function ServiceCatalogSidebar() {
       const items = AWS_SERVICES_CATALOG.filter(
         (svc) =>
           svc.category === cat &&
+          !svc.deprecated &&
           (!q ||
             svc.name.toLowerCase().includes(q) ||
             svc.shortName.toLowerCase().includes(q) ||
@@ -73,7 +74,7 @@ export function ServiceCatalogSidebar() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={`Search ${AWS_SERVICES_CATALOG.length} services`}
+            placeholder={`Search ${AWS_SERVICES_CATALOG.filter((s) => !s.deprecated).length} services`}
             className="w-full h-8 bg-base border border-line hover:border-line-strong focus:border-accent/70 rounded-md pl-8 pr-7 text-xs text-fg placeholder:text-fg-faint focus:outline-none transition-colors"
           />
           {search && (

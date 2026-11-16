@@ -1,7 +1,7 @@
 import type { AwsServiceMetadata } from '../types/cloud';
 import results from '../data/emulatorSupport.json';
 
-export type SupportLevel = 'verified' | 'second-apply' | 'fails' | 'untested';
+export type SupportLevel = 'verified' | 'adjusted' | 'second-apply' | 'fails' | 'untested';
 
 export interface ServiceSupport {
   level: SupportLevel;
@@ -17,8 +17,9 @@ const byType =
 
 /**
  * How a service's main resource fared on the emulator in the last `npm run test:emulator`:
- * applied and destroyed cleanly, needed a second Apply (a known emulator gap LocalCloud works
- * around), failed, or was not exercised by any test canvas.
+ * applied and destroyed cleanly, worked with an emulator-only value or destroy workaround
+ * (`adjusted`), needed LocalCloud's automatic second apply, failed, or was not exercised by any
+ * test canvas. `errors` holds the failure messages, or the notes on how it was helped along.
  */
 export function emulatorSupport(svc: Pick<AwsServiceMetadata, 'terraformResourceType'> | undefined): ServiceSupport {
   const entry = svc ? byType[svc.terraformResourceType] : undefined;

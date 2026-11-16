@@ -16,7 +16,8 @@ locals {
 
 resource "aws_kinesis_stream" "telemetry_ingest_stream" {
   name             = "${local.name_prefix}-telemetry_ingest_stream"
-  retention_period = 24
+  # Emulator only: 24 hours of retention runs as 25, since the emulator rejects 24 (https://github.com/aws/aws-emulator/issues/327). The AWS export keeps the designed value.
+  retention_period = 25
 
   stream_mode_details {
     stream_mode = "ON_DEMAND"
@@ -44,11 +45,17 @@ resource "aws_sfn_state_machine" "rag_orchestrator_sfn" {
 
   definition = jsonencode({
     Comment = "Compiled by LocalCloud Studio"
-    StartAt = "InvokePrimaryStep"
+    StartAt = "Invoke_claude_reasoning_fn"
     States = {
-      InvokePrimaryStep = {
-        Type = "Pass"
-        End  = true
+      Invoke_claude_reasoning_fn = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = "${local.name_prefix}-claude_reasoning_fn"
+          "Payload.$"  = "$"
+        }
+        OutputPath = "$.Payload"
+        End = true
       }
     }
   })
@@ -75,6 +82,12 @@ resource "aws_iam_role" "embedding_processor_fn_exec_role" {
   })
 }
 
+# Lets the function write its logs to CloudWatch
+resource "aws_iam_role_policy_attachment" "embedding_processor_fn_logs" {
+  role       = aws_iam_role.embedding_processor_fn_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
 resource "aws_lambda_function" "embedding_processor_fn" {
   function_name                  = "${local.name_prefix}-embedding_processor_fn"
   role                           = aws_iam_role.embedding_processor_fn_exec_role.arn
@@ -95,6 +108,8 @@ resource "aws_lambda_function" "embedding_processor_fn" {
     variables = {
       ENVIRONMENT = var.environment
       CHUNK_TOKENS = "512"
+      RAG_ORCHESTRATOR_SFN_STATE_MACHINE_ARN = "${aws_sfn_state_machine.rag_orchestrator_sfn.arn}"
+      VECTOR_KNOWLEDGE_INDEX_ENDPOINT = "${aws_opensearch_domain.vector_knowledge_index.endpoint}"
     }
   }
 
@@ -116,6 +131,12 @@ resource "aws_iam_role" "claude_reasoning_fn_exec_role" {
       }
     }]
   })
+}
+
+# Lets the function write its logs to CloudWatch
+resource "aws_iam_role_policy_attachment" "claude_reasoning_fn_logs" {
+  role       = aws_iam_role.claude_reasoning_fn_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_lambda_function" "claude_reasoning_fn" {
@@ -203,4 +224,43 @@ resource "aws_lambda_event_source_mapping" "telemetry_ingest_stream_stream_embed
   starting_position = "LATEST"
   batch_size        = 100
   depends_on        = [aws_iam_role_policy.embedding_processor_fn_consume_telemetry_ingest_stream]
+}
+
+resource "aws_iam_role_policy" "embedding_processor_fn_sfn_rag_orchestrator_sfn" {
+  name = "embedding_processor_fn-sfn-rag_orchestrator_sfn"
+  role = aws_iam_role.embedding_processor_fn_exec_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["states:StartExecution"]
+      Resource = [aws_sfn_state_machine.rag_orchestrator_sfn.arn]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "rag_orchestrator_sfn_invoke_claude_reasoning_fn" {
+  name = "rag_orchestrator_sfn-invoke-claude_reasoning_fn"
+  role = aws_iam_role.rag_orchestrator_sfn_sfn_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = [aws_lambda_function.claude_reasoning_fn.arn]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "embedding_processor_fn_opensearch_vector_knowledge_index" {
+  name = "embedding_processor_fn-opensearch-vector_knowledge_index"
+  role = aws_iam_role.embedding_processor_fn_exec_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["es:ESHttpGet", "es:ESHttpHead", "es:ESHttpPost", "es:ESHttpPut", "es:ESHttpDelete"]
+      Resource = ["${aws_opensearch_domain.vector_knowledge_index.arn}/*"]
+    }]
+  })
 }

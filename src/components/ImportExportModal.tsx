@@ -15,6 +15,7 @@ export function ImportExportModal() {
   const exportProjectJson = useCloudStore((s) => s.exportProjectJson);
   const importProjectJson = useCloudStore((s) => s.importProjectJson);
   const nodeCount = useCloudStore((s) => s.nodes.length);
+  const envCount = useCloudStore((s) => Object.keys(s.environments).length);
   const projectFile = useCloudStore((s) => s.projectFile);
 
   const [tab, setTab] = useState<Tab>('terraform');
@@ -176,7 +177,7 @@ export function ImportExportModal() {
                 >
                   <Download className="w-4 h-4 text-fg-muted" />
                   <div className="text-[14px] text-fg mt-3">Download project</div>
-                  <div className="text-[12.5px] text-fg-faint mt-0.5">{nodeCount} nodes · 4 environments</div>
+                  <div className="text-[12.5px] text-fg-faint mt-0.5">{nodeCount} nodes · {envCount} environment{envCount === 1 ? '' : 's'}</div>
                 </button>
                 <button
                   type="button"

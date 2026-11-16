@@ -1,38 +1,44 @@
 {
-  "generatedAt": "2026-11-14T12:06:20.342Z",
+  "generatedAt": "2026-11-15T22:36:15.222Z",
   "terraformVersion": "1.10.5",
   "emulatorImageCreated": "2026-11-13T21:02:50.109036177Z",
   "byType": {
     "aws_iam_role": {
       "status": "verified",
-      "applied": 20,
+      "applied": 22,
       "failed": 0,
       "errors": []
     },
     "aws_iam_role_policy": {
+      "status": "verified",
+      "applied": 39,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_iam_role_policy_attachment": {
       "status": "verified",
       "applied": 12,
       "failed": 0,
       "errors": []
     },
     "aws_kinesis_stream": {
-      "status": "fails",
-      "applied": 1,
-      "failed": 1,
+      "status": "adjusted",
+      "applied": 2,
+      "failed": 0,
       "errors": [
-        "increasing Kinesis Stream (lc-dev-telemetry_ingest_stream) retention period: operation error Kinesis: IncreaseStreamRetentionPeriod, https response error StatusCode: 400, RequestID: , InvalidArgumentException: Requested retention period (24 hours) for stream lc-dev-telemetry_ingest_stream can not be shorter than existing retention period (24 hours). Use DecreaseRetentionPeriod API."
+        "A 24-hour retention period runs as 25 hours on the emulator, which rejects 24. The AWS export keeps your value."
       ],
       "upstreamIssue": 327
     },
     "aws_lambda_event_source_mapping": {
       "status": "verified",
-      "applied": 3,
+      "applied": 8,
       "failed": 0,
       "errors": []
     },
     "aws_lambda_function": {
       "status": "verified",
-      "applied": 8,
+      "applied": 10,
       "failed": 0,
       "errors": []
     },
@@ -44,7 +50,7 @@
     },
     "aws_sfn_state_machine": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
@@ -54,23 +60,15 @@
       "failed": 0,
       "errors": []
     },
-    "aws_bedrockagent_agent": {
-      "status": "fails",
-      "applied": 0,
-      "failed": 2,
-      "errors": [
-        "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
-      ]
-    },
     "aws_cloudwatch_event_bus": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
     "aws_cloudwatch_event_rule": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
@@ -105,11 +103,11 @@
       "errors": []
     },
     "aws_instance": {
-      "status": "fails",
-      "applied": 0,
-      "failed": 2,
+      "status": "adjusted",
+      "applied": 2,
+      "failed": 0,
       "errors": [
-        "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000002, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator"
+        "Burstable instance types (t2, t3, t4g) run as m6i.large or m7g.medium on the emulator, which can't read their CPU credit settings. It also ignores root volume settings, so the emulator run doesn't compare them. The AWS export keeps your instance type and volume."
       ],
       "upstreamIssue": 422
     },
@@ -166,7 +164,7 @@
     },
     "aws_sns_topic": {
       "status": "verified",
-      "applied": 2,
+      "applied": 6,
       "failed": 0,
       "errors": []
     },
@@ -190,47 +188,71 @@
     },
     "aws_apigatewayv2_api": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_apigatewayv2_authorizer": {
+      "status": "verified",
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
     "aws_apigatewayv2_integration": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
     "aws_apigatewayv2_route": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
     "aws_apigatewayv2_stage": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
     "aws_cloudfront_distribution": {
       "status": "verified",
+      "applied": 4,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_cloudfront_origin_access_control": {
+      "status": "verified",
       "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_cloudwatch_event_target": {
+      "status": "verified",
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
     "aws_cognito_user_pool": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
     "aws_cognito_user_pool_client": {
       "status": "verified",
-      "applied": 2,
+      "applied": 4,
       "failed": 0,
       "errors": []
     },
     "aws_dynamodb_table": {
+      "status": "verified",
+      "applied": 6,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_lambda_function_url": {
       "status": "verified",
       "applied": 2,
       "failed": 0,
@@ -238,11 +260,65 @@
     },
     "aws_lambda_permission": {
       "status": "verified",
-      "applied": 2,
+      "applied": 14,
       "failed": 0,
       "errors": []
     },
     "aws_s3_bucket": {
+      "status": "verified",
+      "applied": 6,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket_notification": {
+      "status": "verified",
+      "applied": 2,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket_public_access_block": {
+      "status": "verified",
+      "applied": 6,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket_server_side_encryption_configuration": {
+      "status": "verified",
+      "applied": 6,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_s3_bucket_versioning": {
+      "status": "verified",
+      "applied": 6,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_secretsmanager_secret": {
+      "status": "verified",
+      "applied": 4,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_secretsmanager_secret_version": {
+      "status": "verified",
+      "applied": 4,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_sns_topic_subscription": {
+      "status": "verified",
+      "applied": 4,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_sqs_queue": {
+      "status": "verified",
+      "applied": 16,
+      "failed": 0,
+      "errors": []
+    },
+    "aws_sqs_queue_policy": {
       "status": "verified",
       "applied": 2,
       "failed": 0,
@@ -251,30 +327,6 @@
     "aws_s3_bucket_lifecycle_configuration": {
       "status": "verified",
       "applied": 2,
-      "failed": 0,
-      "errors": []
-    },
-    "aws_s3_bucket_public_access_block": {
-      "status": "verified",
-      "applied": 2,
-      "failed": 0,
-      "errors": []
-    },
-    "aws_s3_bucket_server_side_encryption_configuration": {
-      "status": "verified",
-      "applied": 2,
-      "failed": 0,
-      "errors": []
-    },
-    "aws_s3_bucket_versioning": {
-      "status": "verified",
-      "applied": 2,
-      "failed": 0,
-      "errors": []
-    },
-    "aws_sqs_queue": {
-      "status": "verified",
-      "applied": 4,
       "failed": 0,
       "errors": []
     },
@@ -309,18 +361,14 @@
       "errors": []
     },
     "aws_elasticache_cluster": {
-      "status": "verified",
+      "status": "adjusted",
       "applied": 1,
       "failed": 0,
-      "errors": []
+      "errors": [
+        "The emulator serves the cache on a port of its own choosing, so the emulator run ignores port changes instead of replacing the cluster. The AWS export keeps the designed port."
+      ]
     },
     "aws_elasticache_subnet_group": {
-      "status": "verified",
-      "applied": 2,
-      "failed": 0,
-      "errors": []
-    },
-    "aws_iam_role_policy_attachment": {
       "status": "verified",
       "applied": 2,
       "failed": 0,
@@ -344,24 +392,12 @@
       "failed": 0,
       "errors": []
     },
-    "aws_secretsmanager_secret": {
-      "status": "verified",
-      "applied": 2,
-      "failed": 0,
-      "errors": []
-    },
-    "aws_secretsmanager_secret_version": {
-      "status": "verified",
-      "applied": 2,
-      "failed": 0,
-      "errors": []
-    },
     "aws_elasticache_replication_group": {
-      "status": "fails",
-      "applied": 0,
-      "failed": 1,
+      "status": "adjusted",
+      "applied": 1,
+      "failed": 0,
       "errors": [
-        "destroy: deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: defa58c9-b6e4-490e-b506-c58cdf6de997, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
+        "The emulator can't delete Redis replication groups, so destroy removes them from Terraform state instead (restarting the emulator clears them). It also picks the port itself, so the emulator run ignores port changes. The AWS export is unchanged."
       ],
       "upstreamIssue": 355
     }
@@ -370,8 +406,8 @@
     {
       "canvas": "ai-streaming-rag",
       "envId": "dev",
-      "ok": false,
-      "durationSeconds": 1257,
+      "ok": true,
+      "durationSeconds": 1265,
       "generalErrors": [],
       "resources": [
         {
@@ -397,18 +433,43 @@
         {
           "address": "aws_iam_role_policy.embedding_processor_fn_consume_telemetry_ingest_stream",
           "type": "aws_iam_role_policy",
-          "applied": false
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.embedding_processor_fn_opensearch_vector_knowledge_index",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.embedding_processor_fn_sfn_rag_orchestrator_sfn",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.rag_orchestrator_sfn_invoke_claude_reasoning_fn",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.claude_reasoning_fn_logs",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.embedding_processor_fn_logs",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
         },
         {
           "address": "aws_kinesis_stream.telemetry_ingest_stream",
           "type": "aws_kinesis_stream",
-          "applied": false,
-          "error": "increasing Kinesis Stream (lc-dev-telemetry_ingest_stream) retention period: operation error Kinesis: IncreaseStreamRetentionPeriod, https response error StatusCode: 400, RequestID: , InvalidArgumentException: Requested retention period (24 hours) for stream lc-dev-telemetry_ingest_stream can not be shorter than existing retention period (24 hours). Use DecreaseRetentionPeriod API."
+          "applied": true,
+          "adjusted": true
         },
         {
           "address": "aws_lambda_event_source_mapping.telemetry_ingest_stream_stream_embedding_processor_fn",
           "type": "aws_lambda_event_source_mapping",
-          "applied": false
+          "applied": true
         },
         {
           "address": "aws_lambda_function.claude_reasoning_fn",
@@ -436,7 +497,7 @@
       "canvas": "ai-streaming-rag",
       "envId": "prod",
       "ok": true,
-      "durationSeconds": 1256,
+      "durationSeconds": 1274,
       "generalErrors": [],
       "resources": [
         {
@@ -462,6 +523,31 @@
         {
           "address": "aws_iam_role_policy.embedding_processor_fn_consume_telemetry_ingest_stream",
           "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.embedding_processor_fn_opensearch_vector_knowledge_index",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.embedding_processor_fn_sfn_rag_orchestrator_sfn",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.rag_orchestrator_sfn_invoke_claude_reasoning_fn",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.claude_reasoning_fn_logs",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.embedding_processor_fn_logs",
+          "type": "aws_iam_role_policy_attachment",
           "applied": true
         },
         {
@@ -499,20 +585,14 @@
     {
       "canvas": "catalog-coverage",
       "envId": "dev",
-      "ok": false,
-      "durationSeconds": 71,
+      "ok": true,
+      "durationSeconds": 129,
       "generalErrors": [],
       "resources": [
         {
           "address": "aws_autoscaling_group.cov_autoscaling_group",
           "type": "aws_autoscaling_group",
           "applied": true
-        },
-        {
-          "address": "aws_bedrockagent_agent.cov_bedrock_agent",
-          "type": "aws_bedrockagent_agent",
-          "applied": false,
-          "error": "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
         },
         {
           "address": "aws_cloudwatch_event_bus.cov_cloudwatch_event_bus",
@@ -550,11 +630,6 @@
           "applied": true
         },
         {
-          "address": "aws_iam_role.cov_bedrock_agent_agent_role",
-          "type": "aws_iam_role",
-          "applied": true
-        },
-        {
           "address": "aws_iam_role.cov_eks_cluster_eks_role",
           "type": "aws_iam_role",
           "applied": true
@@ -567,9 +642,8 @@
         {
           "address": "aws_instance.cov_instance",
           "type": "aws_instance",
-          "applied": false,
-          "error": "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000002, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator",
-          "destroyError": "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000003, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator"
+          "applied": true,
+          "adjusted": true
         },
         {
           "address": "aws_internet_gateway.cov_internet_gateway",
@@ -642,20 +716,14 @@
     {
       "canvas": "catalog-coverage",
       "envId": "prod",
-      "ok": false,
-      "durationSeconds": 70,
+      "ok": true,
+      "durationSeconds": 96,
       "generalErrors": [],
       "resources": [
         {
           "address": "aws_autoscaling_group.cov_autoscaling_group",
           "type": "aws_autoscaling_group",
           "applied": true
-        },
-        {
-          "address": "aws_bedrockagent_agent.cov_bedrock_agent",
-          "type": "aws_bedrockagent_agent",
-          "applied": false,
-          "error": "creating Bedrock Agent: operation error Bedrock Agent: CreateAgent, https response error StatusCode: 403, RequestID: , AccessDeniedException: Amazon Bedrock Agents is in Maintenance Mode. New agent creation is not available for accounts without prior service usage. For new agent development, use Amazon Bedrock AgentCore."
         },
         {
           "address": "aws_cloudwatch_event_bus.cov_cloudwatch_event_bus",
@@ -693,11 +761,6 @@
           "applied": true
         },
         {
-          "address": "aws_iam_role.cov_bedrock_agent_agent_role",
-          "type": "aws_iam_role",
-          "applied": true
-        },
-        {
           "address": "aws_iam_role.cov_eks_cluster_eks_role",
           "type": "aws_iam_role",
           "applied": true
@@ -710,9 +773,8 @@
         {
           "address": "aws_instance.cov_instance",
           "type": "aws_instance",
-          "applied": false,
-          "error": "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000002, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator",
-          "destroyError": "reading EC2 Instance (i-00000000000000003) credit specification: operation error EC2: DescribeInstanceCreditSpecifications, https response error StatusCode: 501, RequestID: 00000000-0000-0000-0000-000000000003, api error NotImplemented: operation DescribeInstanceCreditSpecifications is scaffolded but not implemented in this emulator"
+          "applied": true,
+          "adjusted": true
         },
         {
           "address": "aws_internet_gateway.cov_internet_gateway",
@@ -783,15 +845,628 @@
       ]
     },
     {
+      "canvas": "connections",
+      "envId": "dev",
+      "ok": true,
+      "durationSeconds": 171,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_apigatewayv2_api.con_api",
+          "type": "aws_apigatewayv2_api",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_authorizer.con_api_con_users_auth",
+          "type": "aws_apigatewayv2_authorizer",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_integration.con_api_to_con_fn",
+          "type": "aws_apigatewayv2_integration",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_route.con_api_route_con_fn",
+          "type": "aws_apigatewayv2_route",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_stage.con_api_stage",
+          "type": "aws_apigatewayv2_stage",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudfront_distribution.con_cdn",
+          "type": "aws_cloudfront_distribution",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudfront_origin_access_control.con_cdn_con_fn_oac",
+          "type": "aws_cloudfront_origin_access_control",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_bus.con_bus",
+          "type": "aws_cloudwatch_event_bus",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_rule.con_bus_rule",
+          "type": "aws_cloudwatch_event_rule",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_target.con_bus_to_con_fanout",
+          "type": "aws_cloudwatch_event_target",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_target.con_bus_to_con_fn",
+          "type": "aws_cloudwatch_event_target",
+          "applied": true
+        },
+        {
+          "address": "aws_cognito_user_pool.con_users",
+          "type": "aws_cognito_user_pool",
+          "applied": true
+        },
+        {
+          "address": "aws_cognito_user_pool_client.con_users_client",
+          "type": "aws_cognito_user_pool_client",
+          "applied": true
+        },
+        {
+          "address": "aws_dynamodb_table.con_stream_table",
+          "type": "aws_dynamodb_table",
+          "applied": true
+        },
+        {
+          "address": "aws_dynamodb_table.con_table",
+          "type": "aws_dynamodb_table",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.con_flow_sfn_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.con_fn_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_flow_invoke_con_fn",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_consume_con_in_queue",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_consume_con_stream_table",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_ddb_con_table",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_s3_con_media",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_secret_con_secret",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_sns_con_alerts",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_sqs_con_out_queue",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.con_fn_logs",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_event_source_mapping.con_in_queue_trigger_con_fn",
+          "type": "aws_lambda_event_source_mapping",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_event_source_mapping.con_stream_table_stream_con_fn",
+          "type": "aws_lambda_event_source_mapping",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function.con_fn",
+          "type": "aws_lambda_function",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function_url.con_fn_url",
+          "type": "aws_lambda_function_url",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_api_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_bus_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_cdn_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_topic_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_uploads_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_users_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket.con_media",
+          "type": "aws_s3_bucket",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket.con_uploads",
+          "type": "aws_s3_bucket",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_notification.con_uploads_notifications",
+          "type": "aws_s3_bucket_notification",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_public_access_block.con_media_pab",
+          "type": "aws_s3_bucket_public_access_block",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_public_access_block.con_uploads_pab",
+          "type": "aws_s3_bucket_public_access_block",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_server_side_encryption_configuration.con_media_sse",
+          "type": "aws_s3_bucket_server_side_encryption_configuration",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_server_side_encryption_configuration.con_uploads_sse",
+          "type": "aws_s3_bucket_server_side_encryption_configuration",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_versioning.con_media_versioning",
+          "type": "aws_s3_bucket_versioning",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_versioning.con_uploads_versioning",
+          "type": "aws_s3_bucket_versioning",
+          "applied": true
+        },
+        {
+          "address": "aws_secretsmanager_secret.con_secret",
+          "type": "aws_secretsmanager_secret",
+          "applied": true
+        },
+        {
+          "address": "aws_secretsmanager_secret_version.con_secret_val",
+          "type": "aws_secretsmanager_secret_version",
+          "applied": true
+        },
+        {
+          "address": "aws_sfn_state_machine.con_flow",
+          "type": "aws_sfn_state_machine",
+          "applied": true
+        },
+        {
+          "address": "aws_sns_topic.con_alerts",
+          "type": "aws_sns_topic",
+          "applied": true
+        },
+        {
+          "address": "aws_sns_topic.con_topic",
+          "type": "aws_sns_topic",
+          "applied": true
+        },
+        {
+          "address": "aws_sns_topic_subscription.con_topic_sub_con_fanout",
+          "type": "aws_sns_topic_subscription",
+          "applied": true
+        },
+        {
+          "address": "aws_sns_topic_subscription.con_topic_sub_con_fn",
+          "type": "aws_sns_topic_subscription",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_fanout",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_fanout_dlq",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_in_queue",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_in_queue_dlq",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_out_queue",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_out_queue_dlq",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue_policy.con_fanout_senders",
+          "type": "aws_sqs_queue_policy",
+          "applied": true
+        }
+      ]
+    },
+    {
+      "canvas": "connections",
+      "envId": "prod",
+      "ok": true,
+      "durationSeconds": 170,
+      "generalErrors": [],
+      "resources": [
+        {
+          "address": "aws_apigatewayv2_api.con_api",
+          "type": "aws_apigatewayv2_api",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_authorizer.con_api_con_users_auth",
+          "type": "aws_apigatewayv2_authorizer",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_integration.con_api_to_con_fn",
+          "type": "aws_apigatewayv2_integration",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_route.con_api_route_con_fn",
+          "type": "aws_apigatewayv2_route",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_stage.con_api_stage",
+          "type": "aws_apigatewayv2_stage",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudfront_distribution.con_cdn",
+          "type": "aws_cloudfront_distribution",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudfront_origin_access_control.con_cdn_con_fn_oac",
+          "type": "aws_cloudfront_origin_access_control",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_bus.con_bus",
+          "type": "aws_cloudwatch_event_bus",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_rule.con_bus_rule",
+          "type": "aws_cloudwatch_event_rule",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_target.con_bus_to_con_fanout",
+          "type": "aws_cloudwatch_event_target",
+          "applied": true
+        },
+        {
+          "address": "aws_cloudwatch_event_target.con_bus_to_con_fn",
+          "type": "aws_cloudwatch_event_target",
+          "applied": true
+        },
+        {
+          "address": "aws_cognito_user_pool.con_users",
+          "type": "aws_cognito_user_pool",
+          "applied": true
+        },
+        {
+          "address": "aws_cognito_user_pool_client.con_users_client",
+          "type": "aws_cognito_user_pool_client",
+          "applied": true
+        },
+        {
+          "address": "aws_dynamodb_table.con_stream_table",
+          "type": "aws_dynamodb_table",
+          "applied": true
+        },
+        {
+          "address": "aws_dynamodb_table.con_table",
+          "type": "aws_dynamodb_table",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.con_flow_sfn_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role.con_fn_exec_role",
+          "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_flow_invoke_con_fn",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_consume_con_in_queue",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_consume_con_stream_table",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_ddb_con_table",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_s3_con_media",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_secret_con_secret",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_sns_con_alerts",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.con_fn_sqs_con_out_queue",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.con_fn_logs",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_event_source_mapping.con_in_queue_trigger_con_fn",
+          "type": "aws_lambda_event_source_mapping",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_event_source_mapping.con_stream_table_stream_con_fn",
+          "type": "aws_lambda_event_source_mapping",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function.con_fn",
+          "type": "aws_lambda_function",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_function_url.con_fn_url",
+          "type": "aws_lambda_function_url",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_api_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_bus_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_cdn_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_topic_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_uploads_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_lambda_permission.con_users_invoke_con_fn",
+          "type": "aws_lambda_permission",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket.con_media",
+          "type": "aws_s3_bucket",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket.con_uploads",
+          "type": "aws_s3_bucket",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_notification.con_uploads_notifications",
+          "type": "aws_s3_bucket_notification",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_public_access_block.con_media_pab",
+          "type": "aws_s3_bucket_public_access_block",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_public_access_block.con_uploads_pab",
+          "type": "aws_s3_bucket_public_access_block",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_server_side_encryption_configuration.con_media_sse",
+          "type": "aws_s3_bucket_server_side_encryption_configuration",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_server_side_encryption_configuration.con_uploads_sse",
+          "type": "aws_s3_bucket_server_side_encryption_configuration",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_versioning.con_media_versioning",
+          "type": "aws_s3_bucket_versioning",
+          "applied": true
+        },
+        {
+          "address": "aws_s3_bucket_versioning.con_uploads_versioning",
+          "type": "aws_s3_bucket_versioning",
+          "applied": true
+        },
+        {
+          "address": "aws_secretsmanager_secret.con_secret",
+          "type": "aws_secretsmanager_secret",
+          "applied": true
+        },
+        {
+          "address": "aws_secretsmanager_secret_version.con_secret_val",
+          "type": "aws_secretsmanager_secret_version",
+          "applied": true
+        },
+        {
+          "address": "aws_sfn_state_machine.con_flow",
+          "type": "aws_sfn_state_machine",
+          "applied": true
+        },
+        {
+          "address": "aws_sns_topic.con_alerts",
+          "type": "aws_sns_topic",
+          "applied": true
+        },
+        {
+          "address": "aws_sns_topic.con_topic",
+          "type": "aws_sns_topic",
+          "applied": true
+        },
+        {
+          "address": "aws_sns_topic_subscription.con_topic_sub_con_fanout",
+          "type": "aws_sns_topic_subscription",
+          "applied": true
+        },
+        {
+          "address": "aws_sns_topic_subscription.con_topic_sub_con_fn",
+          "type": "aws_sns_topic_subscription",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_fanout",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_fanout_dlq",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_in_queue",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_in_queue_dlq",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_out_queue",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue.con_out_queue_dlq",
+          "type": "aws_sqs_queue",
+          "applied": true
+        },
+        {
+          "address": "aws_sqs_queue_policy.con_fanout_senders",
+          "type": "aws_sqs_queue_policy",
+          "applied": true
+        }
+      ]
+    },
+    {
       "canvas": "serverless-ecommerce",
       "envId": "dev",
       "ok": true,
-      "durationSeconds": 139,
+      "durationSeconds": 140,
       "generalErrors": [],
       "resources": [
         {
           "address": "aws_apigatewayv2_api.core_commerce_api",
           "type": "aws_apigatewayv2_api",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_authorizer.core_commerce_api_customer_identity_pool_auth",
+          "type": "aws_apigatewayv2_authorizer",
           "applied": true
         },
         {
@@ -857,6 +1532,16 @@
         {
           "address": "aws_iam_role_policy.orders_api_handler_sqs_order_fulfillment_queue",
           "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.fulfillment_worker_logs",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.orders_api_handler_logs",
+          "type": "aws_iam_role_policy_attachment",
           "applied": true
         },
         {
@@ -920,12 +1605,17 @@
       "canvas": "serverless-ecommerce",
       "envId": "prod",
       "ok": true,
-      "durationSeconds": 137,
+      "durationSeconds": 139,
       "generalErrors": [],
       "resources": [
         {
           "address": "aws_apigatewayv2_api.core_commerce_api",
           "type": "aws_apigatewayv2_api",
+          "applied": true
+        },
+        {
+          "address": "aws_apigatewayv2_authorizer.core_commerce_api_customer_identity_pool_auth",
+          "type": "aws_apigatewayv2_authorizer",
           "applied": true
         },
         {
@@ -991,6 +1681,16 @@
         {
           "address": "aws_iam_role_policy.orders_api_handler_sqs_order_fulfillment_queue",
           "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.fulfillment_worker_logs",
+          "type": "aws_iam_role_policy_attachment",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy_attachment.orders_api_handler_logs",
+          "type": "aws_iam_role_policy_attachment",
           "applied": true
         },
         {
@@ -1054,7 +1754,7 @@
       "canvas": "vpc-ecs-rds-ha",
       "envId": "dev",
       "ok": true,
-      "durationSeconds": 186,
+      "durationSeconds": 194,
       "generalErrors": [],
       "resources": [
         {
@@ -1085,7 +1785,8 @@
         {
           "address": "aws_elasticache_cluster.session_redis_cache",
           "type": "aws_elasticache_cluster",
-          "applied": true
+          "applied": true,
+          "adjusted": true
         },
         {
           "address": "aws_elasticache_subnet_group.session_redis_cache_subnets",
@@ -1100,6 +1801,16 @@
         {
           "address": "aws_iam_role.core_backend_fargate_task_role",
           "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.core_backend_fargate_db_primary_postgres_db",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.core_backend_fargate_secret_db_credentials_secret",
+          "type": "aws_iam_role_policy",
           "applied": true
         },
         {
@@ -1168,7 +1879,7 @@
       "canvas": "vpc-ecs-rds-ha",
       "envId": "prod",
       "ok": true,
-      "durationSeconds": 199,
+      "durationSeconds": 223,
       "generalErrors": [],
       "resources": [
         {
@@ -1200,7 +1911,8 @@
           "address": "aws_elasticache_replication_group.session_redis_cache",
           "type": "aws_elasticache_replication_group",
           "applied": true,
-          "destroyError": "deleting ElastiCache Replication Group (lc-prod-session-redis-cache): operation error ElastiCache: DeleteReplicationGroup, https response error StatusCode: 501, RequestID: defa58c9-b6e4-490e-b506-c58cdf6de997, api error NotImplemented: operation DeleteReplicationGroup is scaffolded but not implemented in this emulator"
+          "adjusted": true,
+          "destroyWorkaround": "The emulator has no DeleteReplicationGroup; LocalCloud removes it from Terraform state on destroy"
         },
         {
           "address": "aws_elasticache_subnet_group.session_redis_cache_subnets",
@@ -1215,6 +1927,16 @@
         {
           "address": "aws_iam_role.core_backend_fargate_task_role",
           "type": "aws_iam_role",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.core_backend_fargate_db_primary_postgres_db",
+          "type": "aws_iam_role_policy",
+          "applied": true
+        },
+        {
+          "address": "aws_iam_role_policy.core_backend_fargate_secret_db_credentials_secret",
+          "type": "aws_iam_role_policy",
           "applied": true
         },
         {

@@ -10,7 +10,8 @@ import {
 } from '../utils/terraformCompiler';
 import { AWS_EXPORT_DIR } from '../utils/awsExport';
 import { emulatorSupport } from '../utils/emulatorSupport';
-import type { EnvironmentId, SchemaField } from '../types/cloud';
+import { envIdsOf, envLabel, isProductionEnv } from '../utils/environments';
+import type { SchemaField } from '../types/cloud';
 import { RunnerConsole } from './RunnerConsole';
 import { ResourceExplorerPanel } from './ResourceExplorerPanel';
 import { ArchitectureAuditPanel } from './ArchitectureAuditPanel';
@@ -49,8 +50,6 @@ import {
   monoFieldCls,
 } from './ui';
 
-const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
-
 const DRAWER_TABS: { id: RightDrawerTab; label: string; icon: LucideIcon }[] = [
   { id: 'inspector', label: 'Inspect', icon: SlidersHorizontal },
   { id: 'env-matrix', label: 'Envs', icon: Layers },
@@ -60,7 +59,7 @@ const DRAWER_TABS: { id: RightDrawerTab; label: string; icon: LucideIcon }[] = [
   { id: 'audit', label: 'Audit', icon: ShieldCheck },
 ];
 
-const envShort = (envId: EnvironmentId) => (envId === 'testing' ? 'test' : envId);
+const envShort = envLabel;
 
 export function RightWorkspaceDrawer() {
   const rightTab = useCloudStore((s) => s.rightTab);
@@ -131,20 +130,22 @@ function SupportLine({ support }: { support: ReturnType<typeof emulatorSupport> 
   const text =
     support.level === 'verified'
       ? 'Applies and destroys on the emulator'
-      : support.level === 'second-apply'
-        ? 'Works on the emulator with a second Apply'
+      : support.level === 'adjusted'
+        ? 'Works on the emulator with an adjustment'
+        : support.level === 'second-apply'
+        ? 'Works on the emulator; LocalCloud applies twice'
         : support.level === 'fails'
         ? `Fails on the emulator: ${support.errors[0] || 'see npm run test:emulator'}`
         : 'Not tested on the emulator';
   return (
     <div
       className="text-[12.5px] mt-1 flex items-center gap-1.5 min-w-0"
-      title={[text, ...support.errors.slice(1), support.testedAt ? `Tested ${support.testedAt.slice(0, 10)}` : ''].filter(Boolean).join('\n')}
+      title={[text, ...(support.level === 'fails' ? support.errors.slice(1) : support.errors), support.testedAt ? `Tested ${support.testedAt.slice(0, 10)}` : ''].filter(Boolean).join('\n')}
     >
       <span
         className={cn(
           'w-1.5 h-1.5 rounded-full shrink-0',
-          support.level === 'verified' || support.level === 'second-apply'
+          support.level === 'verified' || support.level === 'adjusted' || support.level === 'second-apply'
             ? 'bg-ok'
             : support.level === 'fails'
               ? 'bg-warn'
@@ -218,6 +219,7 @@ function NodeAndEdgeInspector() {
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const selectedEdge = edges.find((e) => e.id === selectedEdgeId);
+  const ENV_IDS = envIdsOf(environments);
 
   if (selectedEdge) {
     const srcNode = nodes.find((n) => n.id === selectedEdge.source);
@@ -324,7 +326,14 @@ function NodeAndEdgeInspector() {
         <div className="min-w-0 flex-1" title={svc?.description}>
           <div className="text-[15px] font-medium text-fg truncate">{svc?.name || selectedNode.data.label}</div>
           <div className="text-[12.5px] font-mono text-fg-faint truncate mt-0.5">{svc?.terraformResourceType}</div>
-          <SupportLine support={emulatorSupport(svc)} />
+          {svc?.deprecated ? (
+            <div className="text-[12.5px] mt-1 flex items-center gap-1.5 min-w-0" title={svc.deprecated}>
+              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-warn" />
+              <span className="truncate text-warn">Deprecated: {svc.deprecated}</span>
+            </div>
+          ) : (
+            <SupportLine support={emulatorSupport(svc)} />
+          )}
         </div>
         <div className="flex items-center shrink-0">
           <IconButton onClick={() => duplicateNode(selectedNode.id)} title="Duplicate (⌘D)">
@@ -360,7 +369,7 @@ function NodeAndEdgeInspector() {
             />
           </PropRow>
           <PropRow label="Deploy to" hint="Turn this resource off for individual environments">
-            <div className="grid grid-cols-4 gap-1 w-full">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(56px,1fr))] gap-1 w-full">
               {ENV_IDS.map((envId) => {
                 const env = environments[envId];
                 const enabled = selectedNode.data.envEnabled?.[envId] !== false;
@@ -371,14 +380,14 @@ function NodeAndEdgeInspector() {
                     onClick={() => toggleNodeInEnvironment(selectedNode.id, envId)}
                     title={`${enabled ? 'Deployed' : 'Skipped'} in ${env.name}`}
                     className={cn(
-                      'h-7 px-1 rounded-md border text-xs inline-flex items-center justify-center gap-1 transition-colors',
+                      'h-7 px-1 min-w-0 rounded-md border text-xs inline-flex items-center justify-center gap-1 transition-colors',
                       enabled
                         ? 'border-line-strong bg-raised text-fg'
                         : 'border-line text-fg-faint hover:text-fg-muted'
                     )}
                   >
                     <EnvDot color={env.color} hollow={!enabled} className="w-1.5 h-1.5" />
-                    {envShort(envId)}
+                    <span className="truncate">{envShort(envId)}</span>
                   </button>
                 );
               })}
@@ -695,9 +704,30 @@ function MultiEnvMatrixPanel() {
   const setActiveEnv = useCloudStore((s) => s.setActiveEnv);
   const updateEnvironmentProfile = useCloudStore((s) => s.updateEnvironmentProfile);
   const toggleNodeInEnvironment = useCloudStore((s) => s.toggleNodeInEnvironment);
+  const addEnvironment = useCloudStore((s) => s.addEnvironment);
+  const removeEnvironment = useCloudStore((s) => s.removeEnvironment);
 
+  const [newEnvId, setNewEnvId] = useState('');
+  const [copyFrom, setCopyFrom] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+
+  const ENV_IDS = envIdsOf(environments);
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) || nodes[0];
   const svc = selectedNode ? SERVICE_BY_TYPE[selectedNode.data.serviceType] : null;
+
+  const submitNewEnvironment = () => {
+    const id = newEnvId.trim().toLowerCase();
+    if (!id) return;
+    const problem = addEnvironment(id, { copyFrom: copyFrom || undefined });
+    setAddError(problem);
+    if (!problem) {
+      setNewEnvId('');
+      setCopyFrom('');
+    }
+  };
+  /** Applied resources would be orphaned: their state stays behind in terraform-out/environments/<id>. */
+  const appliedIn = (envId: string) => nodes.filter((n) => n.data.provisioningStatus?.[envId] === 'provisioned').length;
 
   const th = 'h-8 px-2 text-left text-[12.5px] font-normal text-fg-faint';
 
@@ -710,29 +740,63 @@ function MultiEnvMatrixPanel() {
             <tr className="border-b border-line">
               <th className={cn(th, 'pl-0')}>Name</th>
               <th className={th}>Region</th>
-              <th className={cn(th, 'pr-0')}>Emulator port</th>
+              <th className={th}>Port</th>
+              <th
+                className={cn(th, 'px-1')}
+                title="Production environments get the stricter audit checks; the others get cost-saving suggestions"
+              >
+                Prod
+              </th>
+              <th className="w-6" />
             </tr>
           </thead>
           <tbody>
             {ENV_IDS.map((envId) => {
               const env = environments[envId];
               const isActive = activeEnv === envId;
+              const applied = appliedIn(envId);
+              if (confirmRemove === envId) {
+                return (
+                  <tr key={envId} className="border-b border-line last:border-b-0">
+                    <td colSpan={5} className="py-1.5">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-fg-muted flex-1 min-w-0">
+                          Remove <span className="font-mono text-fg">{envId}</span> and every override made for it?
+                        </span>
+                        <Button
+                          variant="danger"
+                          onClick={() => {
+                            removeEnvironment(envId);
+                            setConfirmRemove(null);
+                          }}
+                        >
+                          Remove
+                        </Button>
+                        <Button variant="ghost" onClick={() => setConfirmRemove(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }
               return (
-                <tr key={envId} className="border-b border-line last:border-b-0">
-                  <td className="py-1.5 pr-2">
+                <tr key={envId} className="group border-b border-line last:border-b-0">
+                  <td className="py-1.5 pr-2 max-w-0 w-full">
                     <button
                       type="button"
                       onClick={() => setActiveEnv(envId)}
+                      title={`${env.name} (${envId})`}
                       className={cn(
-                        'flex items-center gap-2 text-[14px]',
+                        'flex items-center gap-2 text-[14px] max-w-full',
                         isActive ? 'text-fg' : 'text-fg-muted hover:text-fg'
                       )}
                     >
                       <EnvDot color={env.color} />
-                      {env.name}
+                      <span className="truncate">{env.name}</span>
                     </button>
                   </td>
-                  <td className="py-1.5 px-2 w-[128px]">
+                  <td className="py-1.5 px-1 min-w-[112px]">
                     <select
                       value={env.region}
                       onChange={(e) => updateEnvironmentProfile(envId, { region: e.target.value })}
@@ -744,7 +808,7 @@ function MultiEnvMatrixPanel() {
                       <option value="ap-southeast-1">ap-southeast-1</option>
                     </select>
                   </td>
-                  <td className="py-1.5 pl-2 w-[88px]">
+                  <td className="py-1.5 px-1 min-w-[72px]">
                     <input
                       type="number"
                       value={env.emulatorPort}
@@ -755,18 +819,82 @@ function MultiEnvMatrixPanel() {
                           emulatorEndpoint: `https://127.0.0.1:${p}`,
                         });
                       }}
-                      className={cn(monoFieldCls, 'py-1 text-[12.5px]')}
+                      className={cn(monoFieldCls, 'py-1 px-1.5 text-[12.5px]')}
                     />
+                  </td>
+                  <td className="py-1.5 px-1 text-center">
+                    <Switch
+                      checked={isProductionEnv(env)}
+                      onChange={(next) => updateEnvironmentProfile(envId, { production: next })}
+                      title={isProductionEnv(env) ? 'Treated as production' : 'Not production'}
+                    />
+                  </td>
+                  <td className="py-1.5 text-right">
+                    <IconButton
+                      variant="danger"
+                      disabled={ENV_IDS.length <= 1 || applied > 0}
+                      onClick={() => setConfirmRemove(envId)}
+                      title={
+                        applied > 0
+                          ? `${applied} resource${applied === 1 ? ' is' : 's are'} applied in ${envId}. Destroy it first.`
+                          : ENV_IDS.length <= 1
+                            ? 'A project needs at least one environment'
+                            : `Remove ${envId}`
+                      }
+                      className="w-6 h-6"
+                    >
+                      <X className="w-3 h-3" />
+                    </IconButton>
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+
+        <form
+          className="mt-3 flex items-center gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitNewEnvironment();
+          }}
+        >
+          <input
+            type="text"
+            value={newEnvId}
+            onChange={(e) => {
+              setNewEnvId(e.target.value);
+              setAddError(null);
+            }}
+            placeholder="New environment, e.g. qa"
+            aria-label="New environment name"
+            spellCheck={false}
+            className={monoFieldCls}
+          />
+          <select
+            value={copyFrom}
+            onChange={(e) => setCopyFrom(e.target.value)}
+            aria-label="Start the new environment from"
+            title="Start from base values, or copy another environment's region, usage and overrides"
+            className={cn(fieldCls, 'w-[124px] shrink-0')}
+          >
+            <option value="">Base values</option>
+            {ENV_IDS.map((id) => (
+              <option key={id} value={id}>
+                Copy {envShort(id)}
+              </option>
+            ))}
+          </select>
+          <Button type="submit" disabled={!newEnvId.trim()} className="shrink-0">
+            <Plus className="w-3.5 h-3.5" /> Add
+          </Button>
+        </form>
+        {addError && <p className="text-[12.5px] text-err mt-2">{addError}</p>}
       </Section>
 
       {/* Which resource ships where */}
       <Section title={`Resources · ${nodes.length}`}>
+        <div className="overflow-x-auto">
         <table className="w-full border-collapse">
           <thead>
             <tr className="border-b border-line">
@@ -828,6 +956,7 @@ function MultiEnvMatrixPanel() {
             })}
           </tbody>
         </table>
+        </div>
         <p className="text-[12.5px] text-fg-faint mt-3">
           Click a dot to turn a resource on or off. Numbers count overridden parameters.
         </p>
@@ -1033,6 +1162,7 @@ function AwsEmulatorCommandCenter() {
   const [artifactTab, setArtifactTab] = useState<'shell' | 'compose' | 'dockerfile'>('shell');
   const [copied, setCopied] = useState(false);
 
+  const ENV_IDS = envIdsOf(environments);
   const envProfile = environments[activeEnv];
   const compiled = useMemo(
     () =>

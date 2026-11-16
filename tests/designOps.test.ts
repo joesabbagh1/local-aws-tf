@@ -36,6 +36,11 @@ describe('applyDesignOp', () => {
     if (bad.ok) return;
     expect(bad.error).toMatch(/Unknown service type aws_nope/);
 
+    const deprecated = applyDesignOp('resource.add', doc(), { type: 'aws_bedrock_agent' });
+    expect(deprecated.ok).toBe(false);
+    if (deprecated.ok) return;
+    expect(deprecated.error).toMatch(/can't be added to new designs.*Claude model/);
+
     const fielded = applyDesignOp('resource.add', doc(), { type: 'aws_sqs_queue', fields: { nonsense: 1 } });
     expect(fielded.ok).toBe(false);
     if (fielded.ok) return;
@@ -134,5 +139,60 @@ describe('applyDesignOp', () => {
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.status).toBe(404);
+  });
+
+  it('adds, updates and removes environments, and accepts them in env-scoped ops', () => {
+    const base = doc([lambda()]);
+    const added = applyDesignOp('environment.add', base, { id: 'qa', copyFrom: 'testing' });
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    expect(Object.keys(added.doc.environments)).toContain('qa');
+    expect(added.result).toMatchObject({ id: 'qa', emulatorPort: 9301, copiedFrom: 'testing' });
+
+    const override = applyDesignOp('env.override', added.doc, { id: 'n-handler', env: 'qa', field: 'memory_size', value: 2048 });
+    expect(override.ok && override.doc.nodes[0].data.envOverrides.qa).toEqual({ memory_size: 2048 });
+
+    const dup = applyDesignOp('environment.add', added.doc, { id: 'qa' });
+    expect(dup.ok).toBe(false);
+
+    const taken = applyDesignOp('environment.update', added.doc, { id: 'qa', emulatorPort: 9297 });
+    expect(!taken.ok && taken.error).toMatch(/already used by dev/);
+
+    const updated = applyDesignOp('environment.update', added.doc, { id: 'qa', production: true, region: 'eu-west-1' });
+    expect(updated.ok && updated.doc.environments.qa).toMatchObject({ production: true, region: 'eu-west-1' });
+
+    if (!override.ok) return;
+    const removed = applyDesignOp('environment.remove', override.doc, { id: 'qa' });
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    expect(Object.keys(removed.doc.environments)).not.toContain('qa');
+    expect(removed.doc.nodes[0].data.envOverrides).not.toHaveProperty('qa');
+
+    // An environment the project doesn't have is refused by name
+    const unknown = applyDesignOp('env.enable', removed.doc, { id: 'n-handler', env: 'qa', enabled: false });
+    expect(!unknown.ok && unknown.error).toMatch(/env must be one of dev, testing, staging, prod/);
+  });
+
+  it('saves, replaces and removes scenarios', () => {
+    const base = doc([lambda()]);
+    const saved = applyDesignOp('scenario.save', base, {
+      scenario: { name: 'smoke', steps: [{ service: 'lambda', operation: 'invoke', nodeId: 'n-handler' }] },
+    });
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    const id = saved.result.id as string;
+    expect(saved.doc.scenarios).toHaveLength(1);
+
+    const replaced = applyDesignOp('scenario.save', saved.doc, { scenario: { id, name: 'smoke 2', steps: [] } });
+    expect(replaced.ok && replaced.doc.scenarios?.map((s) => s.name)).toEqual(['smoke 2']);
+
+    const missing = applyDesignOp('scenario.save', base, {
+      scenario: { name: 'x', steps: [{ service: 'lambda', operation: 'invoke', nodeId: 'n-gone' }] },
+    });
+    expect(!missing.ok && missing.error).toMatch(/n-gone not found/);
+
+    if (!replaced.ok) return;
+    const removed = applyDesignOp('scenario.remove', replaced.doc, { id });
+    expect(removed.ok && removed.doc).not.toHaveProperty('scenarios');
   });
 });

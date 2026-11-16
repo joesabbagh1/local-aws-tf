@@ -48,7 +48,9 @@ describe('extra HCL', () => {
       const mainTf = compileMain(node);
       expect(mainTf).not.toContain('was not applied');
       const body = blockBody(mainTf, svc.terraformResourceType, 'thing');
-      expect(body).toContain('  lifecycle {\n    prevent_destroy = true\n  }');
+      // A lifecycle block the compiler writes itself absorbs the hand-written one (Terraform allows one)
+      expect(body).toMatch(/\n {2}lifecycle \{\n(?: {4}[^\n]*\n)*? {4}prevent_destroy = true\n(?: {4}[^\n]*\n)* {2}\}/);
+      expect(body.match(/\blifecycle \{/g)).toHaveLength(1);
       // Still the last thing in the block, so the block stays well-formed
       expect(body.trimEnd().endsWith('}')).toBe(true);
     }

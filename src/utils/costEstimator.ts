@@ -8,6 +8,7 @@ import type {
   UsageProfile,
 } from '../types/cloud';
 import { DEFAULT_ENVIRONMENTS, SERVICE_BY_TYPE } from '../data/awsCatalog';
+import { envIdsOf, isProductionEnv } from './environments';
 import { resolveNodeConfigForEnv } from './terraformCompiler';
 
 /**
@@ -15,7 +16,6 @@ import { resolveNodeConfigForEnv } from './terraformCompiler';
  * environment's usage profile; free tiers, reserved pricing and inter-AZ traffic are left out.
  */
 
-export const ENV_IDS: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 export const COST_DRIVERS: CostDriver[] = ['compute', 'storage', 'requests', 'transfer', 'fees'];
 
 export const DRIVER_LABELS: Record<CostDriver, string> = {
@@ -81,7 +81,8 @@ const zeroDrivers = (): Record<CostDriver, number> => ({ compute: 0, storage: 0,
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export function usageFor(env: Pick<EnvironmentProfile, 'usage'> | undefined, envId: EnvironmentId): UsageProfile {
-  return { ...DEFAULT_ENVIRONMENTS[envId].usage, ...env?.usage };
+  // An environment the app has no defaults for is assumed to see dev-sized traffic until it says otherwise
+  return { ...(DEFAULT_ENVIRONMENTS[envId] ?? DEFAULT_ENVIRONMENTS.dev).usage, ...env?.usage };
 }
 
 interface PriceContext {
@@ -316,6 +317,10 @@ function priceNode(type: string, cfg: Record<string, any>, ctx: PriceContext): {
 }
 
 export interface CostEstimate {
+  /** The environments estimated, in project order. */
+  envIds: EnvironmentId[];
+  /** Which of them count as production (see isProductionEnv). */
+  productionEnvIds: EnvironmentId[];
   items: CostBreakdownItem[];
   totalsByEnv: Record<EnvironmentId, number>;
   driversByEnv: Record<EnvironmentId, Record<CostDriver, number>>;
@@ -323,9 +328,11 @@ export interface CostEstimate {
 
 export function estimateArchitectureCosts(
   nodes: CloudNode[],
-  environments: Partial<Record<EnvironmentId, Pick<EnvironmentProfile, 'usage'>>> = DEFAULT_ENVIRONMENTS
+  environments: Partial<Record<EnvironmentId, Pick<EnvironmentProfile, 'usage'> & Partial<Pick<EnvironmentProfile, 'production'>>>> = DEFAULT_ENVIRONMENTS
 ): CostEstimate {
-  const totalsByEnv = { dev: 0, testing: 0, staging: 0, prod: 0 };
+  const ENV_IDS = envIdsOf(environments);
+  const perEnv = <T,>(make: () => T) => Object.fromEntries(ENV_IDS.map((id) => [id, make()])) as Record<EnvironmentId, T>;
+  const totalsByEnv = perEnv(() => 0);
   const driversByEnv = Object.fromEntries(ENV_IDS.map((id) => [id, zeroDrivers()])) as CostEstimate['driversByEnv'];
   const items: CostBreakdownItem[] = [];
 
@@ -343,9 +350,9 @@ export function estimateArchitectureCosts(
       label: node.data.label,
       serviceType: type,
       category: SERVICE_BY_TYPE[type]?.category ?? 'Management & Governance',
-      monthlyUsd: { dev: 0, testing: 0, staging: 0, prod: 0 },
+      monthlyUsd: perEnv(() => 0),
       drivers: Object.fromEntries(ENV_IDS.map((id) => [id, zeroDrivers()])) as CostBreakdownItem['drivers'],
-      sizingNotes: { dev: '', testing: '', staging: '', prod: '' },
+      sizingNotes: perEnv(() => ''),
     };
 
     for (const envId of ENV_IDS) {
@@ -366,7 +373,8 @@ export function estimateArchitectureCosts(
     items.push(item);
   }
 
-  return { items, totalsByEnv, driversByEnv };
+  const productionEnvIds = ENV_IDS.filter((id) => isProductionEnv({ id, production: environments[id]?.production }));
+  return { envIds: ENV_IDS, productionEnvIds, items, totalsByEnv, driversByEnv };
 }
 
 /** Month-by-month cost for one environment when usage grows by `monthlyGrowth` (0.05 = 5%) each month. */
@@ -401,33 +409,36 @@ const COMMITTABLE = new Set([
 /** Concrete changes that would lower the bill, largest first. One suggestion per resource and environment. */
 export function findCostSavings(nodes: CloudNode[], estimate: CostEstimate): CostSaving[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
+  const production = new Set(estimate.productionEnvIds);
   const savings: CostSaving[] = [];
 
   for (const item of estimate.items) {
     const node = byId.get(item.nodeId);
     if (!node) continue;
-    for (const envId of ENV_IDS) {
+    for (const envId of estimate.envIds) {
       if (item.monthlyUsd[envId] <= 0) continue;
       const cfg = resolveNodeConfigForEnv(node, envId);
       const d = item.drivers[envId];
-      const nonProd = envId === 'dev' || envId === 'testing';
+      const isProd = production.has(envId);
+      // Staging mirrors production's hours; everything else non-production can sleep at night
+      const nonProd = !isProd && envId !== 'staging';
       const add = (title: string, detail: string, monthlyUsd: number) => {
         if (monthlyUsd >= 0.5) {
           savings.push({ id: `${item.nodeId}:${envId}`, nodeId: item.nodeId, envId, title, detail, monthlyUsd: round2(monthlyUsd) });
         }
       };
 
-      if (item.serviceType === 'aws_nat_gateway' && envId !== 'prod') {
+      if (item.serviceType === 'aws_nat_gateway' && !isProd) {
         add('Drop the NAT gateway', 'Use VPC endpoints for AWS APIs, or share one NAT gateway across non-production environments.', d.fees);
-      } else if (item.serviceType === 'aws_db_instance' && cfg.multi_az && envId !== 'prod') {
+      } else if (item.serviceType === 'aws_db_instance' && cfg.multi_az && !isProd) {
         add('Run single-AZ outside production', 'A standby replica doubles instance and storage cost.', (d.compute + d.storage) / 2);
       } else if (nonProd && SCHEDULABLE.has(item.serviceType)) {
         add('Stop outside working hours', 'Running 12 hours on weekdays instead of around the clock covers a typical team.', d.compute * (1 - 60 / 168));
-      } else if (envId === 'prod' && COMMITTABLE.has(item.serviceType)) {
+      } else if (isProd && COMMITTABLE.has(item.serviceType)) {
         add('Commit to a 1-year savings plan', 'No-upfront compute savings plans and reserved instances run about 30% under on-demand.', d.compute * 0.3);
       } else if (item.serviceType === 'aws_lambda_function' && cfg.architectures === 'x86_64') {
         add('Switch to arm64', 'Graviton Lambda is 20% cheaper per GB-second for most runtimes.', d.compute * 0.2);
-      } else if (item.serviceType === 'aws_cloudwatch_log_group' && envId !== 'prod' && (Number(cfg.retention_in_days) || 9999) > 14) {
+      } else if (item.serviceType === 'aws_cloudwatch_log_group' && !isProd && (Number(cfg.retention_in_days) || 9999) > 14) {
         add('Shorten log retention', 'Keep non-production logs for 14 days.', d.storage * (1 - 14 / Math.min(Number(cfg.retention_in_days) || 365, 365)));
       }
     }
@@ -440,7 +451,7 @@ export function costEstimateCsv(estimate: CostEstimate): string {
   const header = ['resource', 'service', 'category', 'environment', ...COST_DRIVERS, 'total_usd', 'sizing'];
   const esc = (v: string | number) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   const rows = estimate.items.flatMap((item) =>
-    ENV_IDS.map((envId) => [
+    estimate.envIds.map((envId) => [
       item.label,
       SERVICE_BY_TYPE[item.serviceType]?.name ?? item.serviceType,
       item.category,

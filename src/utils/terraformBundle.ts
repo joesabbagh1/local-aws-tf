@@ -6,9 +6,8 @@ import {
   type CompileTarget,
 } from './terraformCompiler';
 import { AWS_EXPORT_USER_FILES } from './awsExport';
+import { envIdsOf } from './environments';
 
-/** The four environments every project carries, in compile order. */
-export const ENV_ORDER: EnvironmentId[] = ['dev', 'testing', 'staging', 'prod'];
 
 /**
  * The design plus its per-environment profiles: everything the compiler needs. Kept structural so
@@ -50,7 +49,8 @@ export function buildTerraformFiles(state: TerraformSource, target: CompileTarge
   const filesIfMissing: Record<string, string> = {};
   const lambdaArtifacts: LambdaArtifact[] = [];
 
-  for (const envId of ENV_ORDER) {
+  const envIds = envIdsOf(environments);
+  for (const envId of envIds) {
     const compiled = compileTerraformForEnvironment(nodes, edges, environments[envId], environments, target);
     const dir = `environments/${envId}`;
     files[`${dir}/main.tf`] = compiled.mainTf;
@@ -61,7 +61,8 @@ export function buildTerraformFiles(state: TerraformSource, target: CompileTarge
 
     if (target === 'emulator') {
       files[`${dir}/run-emulator-${envId}.sh`] = compiled.emulatorScriptSh;
-      if (envId === 'dev') {
+      // The emulator image and compose file cover every environment; write them once
+      if (envId === envIds[0]) {
         files['Dockerfile.emulator'] = compiled.dockerfile;
         files['docker-compose.emulator.yml'] = compiled.dockerComposeYml;
       }

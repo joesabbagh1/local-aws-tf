@@ -1,6 +1,10 @@
 import type { Node, Edge } from '@xyflow/react';
 
-export type EnvironmentId = 'dev' | 'testing' | 'staging' | 'prod';
+/**
+ * An environment's id: `dev`, `testing`, `staging` and `prod` by default, plus any the project adds
+ * (see utils/environments.ts). It is written into paths and resource names, so it is DNS-safe.
+ */
+export type EnvironmentId = string;
 
 export interface EnvironmentProfile {
   id: EnvironmentId;
@@ -16,6 +20,8 @@ export interface EnvironmentProfile {
   emulatorAuth: boolean;
   instanceSizingMultiplier: number;
   enableHighAvailability: boolean;
+  /** Stricter audit checks, and no "cheaper outside production" suggestions. Defaults to true for `prod` only. */
+  production?: boolean;
   defaultTags: Record<string, string>;
   /** Traffic and data volumes the cost estimate assumes for this environment. */
   usage: UsageProfile;
@@ -82,6 +88,11 @@ export interface AwsServiceMetadata {
   defaultHeight?: number;
   schema: SchemaField[];
   outputs: { name: string; tfExpression: (resName: string) => string; description: string }[];
+  /**
+   * Why new designs shouldn't use this service, and what to use instead. Deprecated services are
+   * hidden from the catalog and can't be added, but existing designs and imports still compile.
+   */
+  deprecated?: string;
 }
 
 export type ProvisioningState = 'unapplied' | 'planning' | 'provisioning' | 'provisioned' | 'failed';

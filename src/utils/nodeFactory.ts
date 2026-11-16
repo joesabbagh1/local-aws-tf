@@ -36,7 +36,7 @@ export function createServiceNode(
   position?: { x: number; y: number }
 ): CreatedServiceNode | null {
   const svc = SERVICE_BY_TYPE[serviceType];
-  if (!svc) return null;
+  if (!svc || svc.deprecated) return null;
 
   const indexSuffix = existingNodes.filter((n) => n.data.serviceType === serviceType).length + 1;
   const cleanShort = serviceSlug(svc.shortName);

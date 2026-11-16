@@ -8,7 +8,7 @@
 #   the mounted socket — the emulator containers are created on the host like always.
 # · ~/.aws/emulator is mounted at the same absolute path the host uses, so the emulator's
 #   credentials and CA are shared both ways (LOCALCLOUD_EMULATOR_DIR tells the backend).
-# · The emulator publishes 127.0.0.1:9297-9300 on the host with certificates for 127.0.0.1;
+# · The emulator publishes 127.0.0.1:9297-9300 (and 9301+ for added environments) on the host with certificates for 127.0.0.1;
 #   the entrypoint forwards the container's loopback to the host so every client in the
 #   container keeps using https://127.0.0.1:<port> unchanged.
 # · Project working dirs live in ./projects (gitignored); the UI's folder paths are container

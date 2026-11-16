@@ -133,6 +133,12 @@ resource "aws_iam_role" "orders_api_handler_exec_role" {
   })
 }
 
+# Lets the function write its logs to CloudWatch
+resource "aws_iam_role_policy_attachment" "orders_api_handler_logs" {
+  role       = aws_iam_role.orders_api_handler_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
 resource "aws_lambda_function" "orders_api_handler" {
   function_name                  = "${local.name_prefix}-orders_api_handler"
   role                           = aws_iam_role.orders_api_handler_exec_role.arn
@@ -177,6 +183,12 @@ resource "aws_iam_role" "fulfillment_worker_exec_role" {
       }
     }]
   })
+}
+
+# Lets the function write its logs to CloudWatch
+resource "aws_iam_role_policy_attachment" "fulfillment_worker_logs" {
+  role       = aws_iam_role.fulfillment_worker_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_lambda_function" "fulfillment_worker" {
@@ -323,6 +335,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "invoices_media_bucket_lifecycl
 # Cross-Service Wiring, Permissions & Event Triggers (Canvas Edges)
 # ============================================================================
 
+# Routes on core_commerce_api require a token issued by this user pool
+resource "aws_apigatewayv2_authorizer" "core_commerce_api_customer_identity_pool_auth" {
+  api_id           = aws_apigatewayv2_api.core_commerce_api.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "customer_identity_pool-jwt"
+
+  jwt_configuration {
+    audience = [aws_cognito_user_pool_client.customer_identity_pool_client.id]
+    issuer   = "https://${aws_cognito_user_pool.customer_identity_pool.endpoint}"
+  }
+}
+
 resource "aws_apigatewayv2_integration" "core_commerce_api_to_orders_api_handler" {
   api_id                 = aws_apigatewayv2_api.core_commerce_api.id
   integration_type       = "AWS_PROXY"
@@ -334,6 +359,8 @@ resource "aws_apigatewayv2_route" "core_commerce_api_route_orders_api_handler" {
   api_id    = aws_apigatewayv2_api.core_commerce_api.id
   route_key = "ANY /orders/*"
   target    = "integrations/${aws_apigatewayv2_integration.core_commerce_api_to_orders_api_handler.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.core_commerce_api_customer_identity_pool_auth.id
 }
 
 resource "aws_lambda_permission" "core_commerce_api_invoke_orders_api_handler" {

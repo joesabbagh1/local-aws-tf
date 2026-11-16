@@ -6,6 +6,7 @@ import { BlueprintModal } from './components/BlueprintModal';
 import { ImportExportModal } from './components/ImportExportModal';
 import { ExportModal } from './components/ExportModal';
 import { CostAnalyticsView } from './components/CostAnalyticsView';
+import { HistoryView } from './components/HistoryView';
 import { useCloudStore } from './store/useCloudStore';
 import { cn } from './components/ui';
 
@@ -21,6 +22,7 @@ export function App() {
         <RightWorkspaceDrawer />
       </div>
       {view === 'costs' && <CostAnalyticsView />}
+      {view === 'history' && <HistoryView />}
       <BlueprintModal />
       <ImportExportModal />
       <ExportModal />

@@ -1,5 +1,6 @@
-import { getDefaultConfigForService } from '../src/data/awsCatalog';
-import type { CloudNode } from '../src/types/cloud';
+import { AWS_SERVICES_CATALOG, getDefaultConfigForService } from '../src/data/awsCatalog';
+import type { CloudEdge, CloudNode } from '../src/types/cloud';
+import { checkConnection } from '../src/utils/connectionRules';
 
 export function nodeFor(typeId: string, resourceName: string, config: Record<string, unknown> = {}): CloudNode {
   return {
@@ -73,3 +74,36 @@ resource "aws_s3_bucket_versioning" "assets" {
   bucket = "x"
 }
 `;
+
+/**
+ * One node per catalog service (two where a service can connect to itself), with every connection
+ * the canvas accepts between them. Network resources place their targets by wire.
+ */
+export function allConnectionsCanvas(): { nodes: CloudNode[]; edges: CloudEdge[] } {
+  const short = (typeId: string) => typeId.replace(/^aws_/, '');
+  const first = new Map(AWS_SERVICES_CATALOG.map((svc) => [svc.typeId, nodeFor(svc.typeId, short(svc.typeId))]));
+  const second = new Map<string, CloudNode>();
+  const edges: CloudEdge[] = [];
+
+  for (const source of first.values()) {
+    for (const svc of AWS_SERVICES_CATALOG) {
+      let target = first.get(svc.typeId)!;
+      if (target.id === source.id) {
+        // Same service on both ends: connect to a second node of that type, if the pair is allowed at all
+        const twin = second.get(svc.typeId) ?? nodeFor(svc.typeId, `${short(svc.typeId)}_2`);
+        if (!checkConnection(source, twin, edges).ok) continue;
+        second.set(svc.typeId, twin);
+        target = twin;
+      }
+      const check = checkConnection(source, target, edges);
+      if (!check.ok) continue;
+      edges.push({
+        id: `e-${source.id}-${target.id}`,
+        source: source.id,
+        target: target.id,
+        data: { relationshipType: check.relationshipType, label: check.label },
+      });
+    }
+  }
+  return { nodes: [...first.values(), ...second.values()], edges };
+}
