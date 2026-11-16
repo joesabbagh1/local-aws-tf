@@ -491,7 +491,7 @@ export function createApiMiddleware(options: { databaseUrl?: string; defaultProj
     if (!sql || !dbReady) {
       throw new HttpError(
         503,
-        'No database configured. Start Postgres (docker compose up -d postgres) and set DATABASE_URL, e.g. postgres://localcloud:localcloud@127.0.0.1:5432/localcloud'
+        'No database configured. Start Postgres (docker compose up -d postgres) and set DATABASE_URL, e.g. postgres://localcloud:localcloud@127.0.0.1:5434/localcloud'
       );
     }
     return sql;

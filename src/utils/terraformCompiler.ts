@@ -6,7 +6,7 @@ import type {
 } from '../types/cloud';
 import { SERVICE_BY_TYPE } from '../data/awsCatalog';
 import { findAncestorOfType } from './canvasLayout';
-import { adjustmentComment, emulatorInstanceType, emulatorKinesisRetention, isBurstableInstanceType } from './emulatorAdjustments';
+import { adjustmentComment, emulatorInstanceType, emulatorKinesisRetention } from './emulatorAdjustments';
 import {
   dnsSafeName,
   isRedisReplicationGroup,

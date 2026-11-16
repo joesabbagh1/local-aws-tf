@@ -89,15 +89,19 @@ Serves LocalCloud Studio for one project working directory. Designs, history and
 are stored in Postgres (--db or $DATABASE_URL); the canvas is also materialized to
 <projectDir>/${PROJECT_FILE} and Terraform is written to <projectDir>/terraform-out/.
 
+Other commands:
+  localcloud-studio test [projectDir] [--env dev]   deploy to a fresh emulator, run the saved scenarios, destroy (no database; see test --help)
+  localcloud-studio mcp [--url http://127.0.0.1:5173] [--project <dir-or-id>]   MCP server over stdio, for agents
+
 Quick start:  docker compose up -d postgres
-              DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5432/localcloud localcloud-studio ./infra --open`);
+              DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5434/localcloud localcloud-studio ./infra --open`);
   process.exit(args.help ? 0 : 1);
 }
 if (!args.databaseUrl) {
   console.error(`No database configured. Designs and history live in Postgres:
 
   docker compose up -d postgres   # or use your own Postgres
-  DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5432/localcloud localcloud-studio ...`);
+  DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5434/localcloud localcloud-studio ...`);
   process.exit(1);
 }
 
