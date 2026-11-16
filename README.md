@@ -61,7 +61,7 @@ DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5434/localcloud npm run 
 
   Anything else, like a database "calling" a Lambda or an edge into a VPC, is refused with a short reason. A connection's label sets the API route (`POST /orders`), the S3 key prefix (`uploads/`), the DNS record name or the Cognito trigger. Switch a connection to *depends_on only* to order two resources without wiring them.
 - **Data**: use what's deployed. Send HTTP requests to an API, invoke a Lambda and read its logs, send and receive SQS messages, publish to SNS, put EventBridge events and Kinesis records, run a state machine and wait for its result, read and write S3 objects and DynamoDB items. Pick the resource from the canvas; LocalCloud finds its deployed counterpart in the active environment.
-- **Scenarios**: save Data tab operations as steps of an end-to-end check, e.g. send a request, then expect the order in the table. Read steps can wait up to two minutes for asynchronous flows to land. Scenarios are part of the project (versioned, in `localcloud.json`) and run from the UI or MCP against any environment's emulator. Every run is recorded.
+- **Scenarios**: save Data tab operations as steps of an end-to-end check, e.g. send a request, then expect the order in the table. Read steps can wait up to two minutes for asynchronous flows to land. Scenarios are part of the project (versioned, in `localcloud.json`). They run from the UI or MCP against any environment's emulator, and from CI with [`localcloud-studio test`](#scenarios-in-ci). Every run is recorded.
 - **Audit**: architecture checks per environment and an estimated monthly AWS cost per environment.
 - **History**: the **History** page lists every version with what it changed, field by field with before and after. It also lists every Terraform and scenario run with its full output, plan and the design version it ran against, and the audit trail of who did what (the canvas, an agent, a file change). Restore any version.
 - **Projects and history**: every save is a numbered version in Postgres (`who`, `when`, a summary of the change), with restore and diff. A second writer — another tab or an agent — makes your save return a conflict instead of overwriting: the page offers a reload. `./localcloud.json` stays the committed, diffable artifact; edit or pull it and the backend folds the change in as a new `import` version on next open.
@@ -111,6 +111,40 @@ Agents design, deploy and test environments through the same backend, with the s
 | Scenarios | `scenarios_list` `scenario_save` `scenario_remove` `scenario_run` |
 
 Each design tool is one API call → one transaction → one version recorded with actor `mcp`, so the UI, the history and `project_diff` see exactly what the agent did. A refused `connection_create` returns the same reason the canvas would show.
+
+## Scenarios in CI
+
+`localcloud-studio test` checks a project the way CI needs it:
+1. It deploys the design in `localcloud.json` to a fresh emulator.
+2. It runs every saved scenario.
+3. It destroys everything again.
+
+It needs Docker and Terraform, but no database: it reads the committed `localcloud.json`. It also handles the emulator gaps the way the app's runner does.
+
+```sh
+npx localcloud-studio test ./infra                       # dev, every scenario
+npx localcloud-studio test ./infra --env dev,staging     # several environments, one after another
+npx localcloud-studio test ./infra --scenario "Order reaches the queue"
+```
+
+It exits 0 when everything passed, 1 when a scenario failed or the design didn't deploy or destroy cleanly, and 2 when it couldn't run at all. Terraform's output is printed only for a step that fails; `--verbose` streams all of it. The emulator gets its own port (`--port`, default 9398), so it never touches the emulators the app runs. `--keep` leaves the emulator running afterwards so you can look around.
+
+In GitHub Actions it also writes a pass/fail table to the job summary:
+
+```yaml
+jobs:
+  scenarios:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: npx localcloud-studio test ./infra
+```
 
 ## Shortcuts
 

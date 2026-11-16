@@ -5,12 +5,14 @@ import { spawn } from 'node:child_process';
 import { createApiMiddleware, PROJECT_FILE } from './api';
 import { DbReady, createSql } from './db';
 import { runMcpServer } from './mcp';
+import { runTestCommand } from './testCommand';
 import { version } from '../package.json';
 
 /**
  * Standalone entry point: serves the built UI and the local API from one process.
  *   localcloud-studio [projectDir] [--port 5173] [--db <postgres-url>] [--open]
  *   localcloud-studio mcp [--url http://127.0.0.1:5173] [--project <dir-or-id>] [--token <t>]
+ *   localcloud-studio test [projectDir] [--env dev] [--scenario <name>] [--port 9398] [--keep] [--verbose]
  * The project's working dir (localcloud.json, terraform-out/) is projectDir (default: cwd);
  * designs, history and runs live in Postgres at --db / $DATABASE_URL.
  */
@@ -21,6 +23,15 @@ if (process.argv[2] === 'mcp') {
     console.error(err?.message || err);
     process.exit(1);
   });
+} else if (process.argv[2] === 'test') {
+  // Deploy to a fresh emulator, run the saved scenarios, destroy: for CI. No database needed.
+  runTestCommand(process.argv.slice(3)).then(
+    (code) => process.exit(code),
+    (err) => {
+      console.error(err?.stack || err);
+      process.exit(2);
+    }
+  );
 } else {
 // ───────────────────────────────────────────────────────────────────────────── web server mode
 
