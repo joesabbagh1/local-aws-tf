@@ -30,6 +30,30 @@ describe('applyDesignOp', () => {
     expect(added.doc.nodes).toHaveLength(2);
   });
 
+  it('sets and changes a connection\'s access level, and refuses one that does not apply', () => {
+    const fn = lambda();
+    const table = nodeFor('aws_dynamodb_table', 'orders');
+    const topic = nodeFor('aws_sns_topic', 'alerts');
+    const created = applyDesignOp('connection.create', doc([fn, table, topic]), { from: fn.id, to: table.id, access: 'read' });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const id = (created.result as { id: string }).id;
+    expect(created.doc.edges[0].data?.access).toBe('read');
+
+    const changed = applyDesignOp('connection.configure', created.doc, { id, access: 'write', label: 'orders' });
+    expect(changed.ok && changed.doc.edges[0].data).toMatchObject({ access: 'write', label: 'orders' });
+    if (!changed.ok) return;
+    const cleared = applyDesignOp('connection.configure', changed.doc, { id, access: null });
+    expect(cleared.ok && cleared.doc.edges[0].data?.access).toBeUndefined();
+    const relabelled = applyDesignOp('connection.configure', changed.doc, { id, label: 'x' });
+    expect(relabelled.ok && relabelled.doc.edges[0].data?.access).toBe('write');
+
+    const bad = applyDesignOp('connection.configure', created.doc, { id, access: 'admin' });
+    expect(!bad.ok && bad.error).toBe('access must be one of read (Read), write (Write), readwrite (Read and write)');
+    const none = applyDesignOp('connection.create', doc([fn, topic]), { from: fn.id, to: topic.id, access: 'read' });
+    expect(!none.ok && none.error).toMatch(/no access levels to choose/);
+  });
+
   it('refuses unknown service types and unknown fields, naming the valid ones', () => {
     const bad = applyDesignOp('resource.add', doc(), { type: 'aws_nope' });
     expect(bad.ok).toBe(false);

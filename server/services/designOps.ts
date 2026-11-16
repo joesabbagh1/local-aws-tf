@@ -3,6 +3,7 @@ import { SERVICE_BY_TYPE } from '../../src/data/awsCatalog';
 import type { CloudEdge, CloudNode, EnvironmentId } from '../../src/types/cloud';
 import { EXTRA_HCL_KEY } from '../../src/utils/terraformCompiler';
 import { checkConnection } from '../../src/utils/connectionRules';
+import { accessLevelsFor, callWiring } from '../../src/utils/wiringCatalog';
 import { createServiceNode } from '../../src/utils/nodeFactory';
 import { normalizeNodes, releaseChildren, reparentNode } from '../../src/utils/canvasLayout';
 import { parseTerraformHclToCanvas } from '../../src/utils/hclImporter';
@@ -67,6 +68,21 @@ function checkFields(serviceType: string, fields: Record<string, unknown>): stri
 const nowId = () => Date.now().toString(36);
 
 export type DesignOpArgs = Record<string, unknown>;
+
+/**
+ * A connection's access level: read or write only, where the target offers it (see
+ * accessLevelsFor). Undefined input keeps the full grant.
+ */
+function parseAccess(source: CloudNode, target: CloudNode, value: unknown): { value?: 'read' | 'write' | 'readwrite'; error?: string } {
+  if (value === undefined) return {};
+  const levels = accessLevelsFor(target.data.serviceType);
+  if (!callWiring(source.data.serviceType, target.data.serviceType)?.grant || levels.length === 0) {
+    return { error: `A ${source.data.serviceType} → ${target.data.serviceType} connection has no access levels to choose` };
+  }
+  const match = levels.find((l) => l.value === value);
+  if (!match) return { error: `access must be one of ${levels.map((l) => `${l.value} (${l.label})`).join(', ')}` };
+  return { value: match.value };
+}
 
 export function applyDesignOp(op: string, doc: ProjectFile, args: DesignOpArgs): DesignOpResult {
   const requireString = (key: string): string | null => {
@@ -175,19 +191,54 @@ export function applyDesignOp(op: string, doc: ProjectFile, args: DesignOpArgs):
       // Same rules as the canvas: a refused connection returns the reason
       const check = checkConnection(source, target, edgesOf(doc));
       if (!check.ok) return { ok: false, error: `Connection refused: ${check.reason}`, status: 400 };
+      const access = parseAccess(source, target, args.access);
+      if (access.error) return { ok: false, error: access.error, status: 400 };
 
       const edge: CloudEdge = {
         id: `edge-${from}-${to}-${nowId()}`,
         source: from!,
         target: to!,
         animated: check.relationshipType !== 'network_attachment',
-        data: { relationshipType: check.relationshipType, label: check.label },
+        data: { relationshipType: check.relationshipType, label: check.label, ...(access.value ? { access: access.value } : {}) },
       };
       return {
         ok: true,
         doc: withParts(doc, nodesOf(doc), [...edgesOf(doc), edge]),
-        result: { id: edge.id, from: from!, to: to!, relationshipType: check.relationshipType, label: check.label },
+        result: {
+          id: edge.id,
+          from: from!,
+          to: to!,
+          relationshipType: check.relationshipType,
+          label: check.label,
+          ...(access.value ? { access: access.value } : {}),
+        },
       };
+    }
+
+    case 'connection.configure': {
+      const id = requireString('id');
+      const edge = id ? edgesOf(doc).find((e) => e.id === id) : undefined;
+      if (!edge) return { ok: false, error: `connection ${id} not found`, status: 404 };
+      if (args.access === undefined && args.label === undefined) {
+        return { ok: false, error: 'Provide access and/or label', status: 400 };
+      }
+      const source = findNode(doc, edge.source);
+      const target = findNode(doc, edge.target);
+      if (!source || !target) return { ok: false, error: 'the connection points at a resource that no longer exists', status: 404 };
+      const access = args.access === null ? { value: undefined } : parseAccess(source, target, args.access);
+      if (access.error) return { ok: false, error: access.error, status: 400 };
+      if (args.label !== undefined && typeof args.label !== 'string') return { ok: false, error: 'label must be a string', status: 400 };
+
+      const { access: _previous, ...rest } = edge.data ?? ({} as NonNullable<CloudEdge['data']>);
+      const data = {
+        ...rest,
+        relationshipType: edge.data?.relationshipType ?? 'data_flow',
+        ...(args.label !== undefined ? { label: String(args.label) } : {}),
+        // null clears it back to the full grant; leaving it out keeps what was there
+        ...(args.access === undefined ? (edge.data?.access ? { access: edge.data.access } : {}) : access.value ? { access: access.value } : {}),
+      };
+      const edges = edgesOf(doc).map((e) => (e.id === id ? { ...e, data } : e));
+      return { ok: true, doc: withParts(doc, nodesOf(doc), edges), result: { id, ...data } };
     }
 
     case 'connection.remove': {

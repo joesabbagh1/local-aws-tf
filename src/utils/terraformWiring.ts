@@ -1,6 +1,6 @@
 import type { CloudEdge, CloudNode, EnvironmentId } from '../types/cloud';
 import { dnsSafeName, mainResourceType, resolveNodeConfigForEnv, tfName } from './terraformNames';
-import { ACCESS, CALLERS, callWiring, type AccessStatement, type TargetRef } from './wiringCatalog';
+import { ACCESS, CALLERS, accessStatements, callWiring, type AccessStatement, type TargetRef } from './wiringCatalog';
 
 /**
  * Terraform for the connections on the canvas. The pairs handled here are the pairs
@@ -849,7 +849,12 @@ resource "aws_apigatewayv2_authorizer" "${authorizer}" {
       const ref = targetRef(dst, envId);
       const access = ACCESS[dstType];
       blocks.push(
-        rolePolicy(`${srcName}_${access.key}_${dstName}`, `${srcName}-${access.key}-${dstName}`, CALLERS[srcType].role(srcName), access.statements(ref))
+        rolePolicy(
+          `${srcName}_${access.key}_${dstName}`,
+          `${srcName}-${access.key}-${dstName}`,
+          CALLERS[srcType].role(srcName),
+          accessStatements(dstType, ref, edge.data?.access)
+        )
       );
       // An agent's action group is invoked by Bedrock itself, which needs the function's consent
       if (srcType === 'aws_bedrock_agent' && dstType === 'aws_lambda_function') {

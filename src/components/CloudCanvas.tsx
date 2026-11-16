@@ -20,6 +20,7 @@ import type { CloudNode, CloudEdge } from '../types/cloud';
 import { Button } from './ui';
 import { PlanReviewBar } from './PlanReviewBar';
 import { checkConnection } from '../utils/connectionRules';
+import { accessLevelsFor } from '../utils/wiringCatalog';
 
 const EDGE_COLORS: Record<string, string> = {
   event_trigger: '#D4945A',
@@ -166,12 +167,18 @@ export function CloudCanvas() {
   const styledEdges: CloudEdge[] = edges.map((edge): CloudEdge => {
     const rel = edge.data?.relationshipType || 'data_flow';
     const stroke = edge.selected ? '#E8C400' : EDGE_COLORS[rel] || EDGE_COLORS.data_flow;
+    // A narrowed grant says so on the line: "iam_grant · read"
+    const access = edge.data?.access;
+    const accessLabel =
+      access && access !== 'readwrite'
+        ? accessLevelsFor(nodes.find((n) => n.id === edge.target)?.data.serviceType || '').find((l) => l.value === access)?.label
+        : undefined;
 
     return {
       ...edge,
       // Solid lines read calmer; only the selected connection animates
       animated: !!edge.selected,
-      label: edge.data?.label || rel,
+      label: `${edge.data?.label || rel}${accessLabel ? ` · ${accessLabel.toLowerCase()}` : ''}`,
       labelStyle: {
         fill: '#9CA1A4',
         fontSize: 11.5,

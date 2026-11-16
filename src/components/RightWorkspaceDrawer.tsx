@@ -10,6 +10,7 @@ import {
 } from '../utils/terraformCompiler';
 import { AWS_EXPORT_DIR } from '../utils/awsExport';
 import { emulatorSupport } from '../utils/emulatorSupport';
+import { accessLevelsFor, callWiring } from '../utils/wiringCatalog';
 import { envIdsOf, envLabel, isProductionEnv } from '../utils/environments';
 import type { SchemaField } from '../types/cloud';
 import { RunnerConsole } from './RunnerConsole';
@@ -225,6 +226,11 @@ function NodeAndEdgeInspector() {
   if (selectedEdge) {
     const srcNode = nodes.find((n) => n.id === selectedEdge.source);
     const dstNode = nodes.find((n) => n.id === selectedEdge.target);
+    // Only a call that grants access, to a target whose grant can be narrowed
+    const accessLevels =
+      srcNode && dstNode && selectedEdge.data?.relationshipType !== 'depends_on' && callWiring(srcNode.data.serviceType, dstNode.data.serviceType)?.grant
+        ? accessLevelsFor(dstNode.data.serviceType)
+        : [];
 
     return (
       <>
@@ -271,6 +277,16 @@ function NodeAndEdgeInspector() {
                 className={monoFieldCls}
               />
             </PropRow>
+            {accessLevels.length > 0 && (
+              <PropRow label="Access" hint={`What ${srcNode?.data.label} may do with ${dstNode?.data.label}: the IAM policy on its role`}>
+                <Segmented
+                  value={selectedEdge.data?.access ?? 'readwrite'}
+                  options={accessLevels}
+                  // The full grant is the default, so it is stored as no level at all
+                  onChange={(value) => updateEdgeData(selectedEdge.id, { access: value === 'readwrite' ? undefined : value })}
+                />
+              </PropRow>
+            )}
           </div>
         </Section>
       </>

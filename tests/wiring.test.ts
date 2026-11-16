@@ -5,6 +5,7 @@ import { compileTerraformForEnvironment } from '../src/utils/terraformCompiler';
 import { runArchitectureLinter } from '../src/utils/architectureValidator';
 import type { CloudEdge, CloudNode } from '../src/types/cloud';
 import { allConnectionsCanvas, nodeFor } from './fixtures';
+import { ACCESS, accessLevelsFor, accessStatements } from '../src/utils/wiringCatalog';
 
 const TYPES = AWS_SERVICES_CATALOG.map((svc) => svc.typeId);
 const NETWORK_TYPES = ['aws_vpc', 'aws_subnet', 'aws_security_group'];
@@ -82,6 +83,53 @@ describe('wiring details', () => {
     expect(tf).toContain('ALERTS_TOPIC_ARN = "${aws_sns_topic.alerts.arn}"');
     expect(tf).toContain('"secretsmanager:GetSecretValue"');
     expect(tf).toContain('role = aws_iam_role.notify_exec_role.id');
+  });
+
+  it('narrows a grant to the access level a connection chooses', () => {
+    const fn = nodeFor('aws_lambda_function', 'reader');
+    const table = nodeFor('aws_dynamodb_table', 'orders');
+    const queue = nodeFor('aws_sqs_queue', 'jobs');
+    const bucket = nodeFor('aws_s3_bucket', 'media');
+    const tf = compile(
+      [fn, table, queue, bucket],
+      [edge(fn, table, { relationshipType: 'iam_grant', access: 'read' }), edge(fn, queue, { relationshipType: 'iam_grant', access: 'write' }), edge(fn, bucket)]
+    );
+    const policy = (name: string) => tf.slice(tf.indexOf(`resource "aws_iam_role_policy" "${name}"`)).split('\n}\n')[0];
+
+    const ddb = policy('reader_ddb_orders');
+    expect(ddb).toContain('"dynamodb:GetItem"');
+    expect(ddb).toContain('"dynamodb:Query"');
+    expect(ddb).not.toContain('PutItem');
+    expect(ddb).not.toContain('DeleteItem');
+    // Indexes stay readable
+    expect(ddb).toContain('/index/*');
+
+    const sqs = policy('reader_sqs_jobs');
+    expect(sqs).toContain('"sqs:SendMessage"');
+    expect(sqs).not.toContain('ReceiveMessage');
+
+    // No level: the full grant, as before
+    const s3 = policy('reader_s3_media');
+    expect(s3).toContain('"s3:GetObject"');
+    expect(s3).toContain('"s3:PutObject"');
+  });
+
+  it('offers access levels only where a grant mixes reading and writing', () => {
+    expect(accessLevelsFor('aws_sqs_queue').map((l) => `${l.value}:${l.label}`)).toEqual(['read:Receive', 'write:Send', 'readwrite:Send and receive']);
+    expect(accessLevelsFor('aws_efs_file_system').map((l) => l.value)).toEqual(['read', 'readwrite']);
+    expect(accessLevelsFor('aws_sns_topic')).toEqual([]);
+    // Each level is a subset of the full grant, so narrowing never adds a permission
+    for (const type of TYPES) {
+      const spec = ACCESS[type];
+      if (!spec?.levels) continue;
+      const full = new Set(spec.statements({ name: 'x', tfType: type, cfg: {} }).flatMap((st) => st.actions));
+      for (const level of [spec.levels.read, spec.levels.write]) {
+        for (const action of level?.actions ?? []) expect(full.has(action), `${type}: ${action}`).toBe(true);
+      }
+    }
+    // An unavailable level falls back to the full grant
+    const ref = { name: 'x', tfType: 'aws_efs_file_system', cfg: {} };
+    expect(accessStatements('aws_efs_file_system', ref, 'write')).toEqual(ACCESS.aws_efs_file_system.statements(ref));
   });
 
   it('grants a container on its task role and tells it where things are', () => {

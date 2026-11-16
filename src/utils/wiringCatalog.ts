@@ -26,9 +26,23 @@ export interface AccessStatement {
   resourceList?: string;
 }
 
+/** How much of a resource a caller may use. Without one, a connection gets the full grant. */
+export type AccessLevel = 'read' | 'write' | 'readwrite';
+
+/** A narrower grant: the subset of the full grant's actions it keeps, and what the UI calls it. */
+export interface AccessLevelSpec {
+  label: string;
+  actions: string[];
+}
+
 export interface AccessSpec {
   /** Short tag used in policy names: `<caller>_<key>_<target>`. */
   key: string;
+  /**
+   * Narrower grants a connection can choose instead of the full one, for resources whose full
+   * grant mixes reading and writing. `readwrite` labels the full grant.
+   */
+  levels?: { read?: AccessLevelSpec; write?: AccessLevelSpec; readwrite: string };
   /** IAM statements the caller's role gets. Empty when access is by network only. */
   statements: (t: TargetRef) => AccessStatement[];
   /** Environment variables for callers that take them: suffix → value (an HCL template string body). */
@@ -42,6 +56,11 @@ const tpl = (t: TargetRef, name: string) => `\${${attr(t, name)}}`;
 export const ACCESS: Record<string, AccessSpec> = {
   aws_dynamodb_table: {
     key: 'ddb',
+    levels: {
+      read: { label: 'Read', actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:Scan'] },
+      write: { label: 'Write', actions: ['dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'] },
+      readwrite: 'Read and write',
+    },
     statements: (t) => [
       {
         actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan'],
@@ -52,6 +71,11 @@ export const ACCESS: Record<string, AccessSpec> = {
   },
   aws_s3_bucket: {
     key: 's3',
+    levels: {
+      read: { label: 'Read', actions: ['s3:GetObject', 's3:ListBucket'] },
+      write: { label: 'Write', actions: ['s3:PutObject', 's3:DeleteObject'] },
+      readwrite: 'Read and write',
+    },
     statements: (t) => [
       {
         actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:ListBucket'],
@@ -62,6 +86,11 @@ export const ACCESS: Record<string, AccessSpec> = {
   },
   aws_sqs_queue: {
     key: 'sqs',
+    levels: {
+      read: { label: 'Receive', actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes'] },
+      write: { label: 'Send', actions: ['sqs:SendMessage', 'sqs:GetQueueAttributes'] },
+      readwrite: 'Send and receive',
+    },
     statements: (t) => [
       {
         actions: ['sqs:SendMessage', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes'],
@@ -84,6 +113,11 @@ export const ACCESS: Record<string, AccessSpec> = {
   },
   aws_kms_key: {
     key: 'kms',
+    levels: {
+      read: { label: 'Decrypt', actions: ['kms:Decrypt', 'kms:DescribeKey'] },
+      write: { label: 'Encrypt', actions: ['kms:Encrypt', 'kms:GenerateDataKey', 'kms:DescribeKey'] },
+      readwrite: 'Both',
+    },
     statements: (t) => [
       { actions: ['kms:Decrypt', 'kms:Encrypt', 'kms:GenerateDataKey', 'kms:DescribeKey'], resources: [attr(t, 'arn')] },
     ],
@@ -148,6 +182,10 @@ export const ACCESS: Record<string, AccessSpec> = {
   },
   aws_efs_file_system: {
     key: 'efs',
+    levels: {
+      read: { label: 'Read only', actions: ['elasticfilesystem:ClientMount'] },
+      readwrite: 'Read and write',
+    },
     statements: (t) => [
       { actions: ['elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite'], resources: [attr(t, 'arn')] },
     ],
@@ -289,6 +327,31 @@ export const NOT_MODELLED: Record<string, string> = {
   'aws_ecr_repository>aws_lambda_function':
     'Lambda functions here deploy from a zip (inline code or a folder), not a container image.',
 };
+
+/** The levels a connection to `targetType` can choose, in display order; empty when it has only the full grant. */
+export function accessLevelsFor(targetType: string): { value: AccessLevel; label: string }[] {
+  const levels = ACCESS[targetType]?.levels;
+  if (!levels) return [];
+  return [
+    ...(levels.read ? [{ value: 'read' as const, label: levels.read.label }] : []),
+    ...(levels.write ? [{ value: 'write' as const, label: levels.write.label }] : []),
+    { value: 'readwrite' as const, label: levels.readwrite },
+  ];
+}
+
+/**
+ * The statements a caller gets for one connection: the full grant, narrowed to the connection's
+ * access level when the target offers that level. An unknown or unavailable level gets the full grant.
+ */
+export function accessStatements(targetType: string, t: TargetRef, level: unknown): AccessStatement[] {
+  const spec = ACCESS[targetType];
+  if (!spec) return [];
+  const all = spec.statements(t);
+  const narrower = level === 'read' || level === 'write' ? spec.levels?.[level] : undefined;
+  if (!narrower) return all;
+  const keep = new Set(narrower.actions);
+  return all.map((s) => ({ ...s, actions: s.actions.filter((a) => keep.has(a)) })).filter((s) => s.actions.length > 0);
+}
 
 export type CallWiring = { grant: boolean; env: boolean };
 

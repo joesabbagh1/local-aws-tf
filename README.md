@@ -57,7 +57,7 @@ DATABASE_URL=postgres://localcloud:localcloud@127.0.0.1:5434/localcloud npm run 
 - **Destroy preview**: **destroy** in the Run tab shows a destroy plan the same way, with its own red confirm button. The top bar's Apply never applies a pending destroy plan.
 - **Connections**: the canvas only accepts connections that mean something, and every one it accepts generates Terraform:
   - **Triggers**: SQS, Kinesis and DynamoDB streams into Lambda; S3, SNS and EventBridge into Lambda, SQS and SNS, with the queue and topic policies that let them deliver. API Gateway into Lambda, SQS, Step Functions, EventBridge, Kinesis or a load balancer. A state machine gets one step per Lambda, queue, topic or bus it connects to.
-  - **Access**: anything that runs code (Lambda, ECS, EC2, Auto Scaling, EKS, Step Functions) gets a least-privilege IAM policy for what it calls. Lambda and ECS also get environment variables saying where each resource is (`ORDERS_TABLE_NAME`, `JOBS_QUEUE_URL`, `DB_HOST`…). EC2 gets a role and instance profile only once it calls something.
+  - **Access**: anything that runs code (Lambda, ECS, EC2, Auto Scaling, EKS, Step Functions) gets a least-privilege IAM policy for what it calls. Lambda and ECS also get environment variables saying where each resource is (`ORDERS_TABLE_NAME`, `JOBS_QUEUE_URL`, `DB_HOST`…). EC2 gets a role and instance profile only once it calls something. A connection to DynamoDB, S3, SQS, KMS or EFS can be narrowed to read or write only (for SQS, receive or send) in the connection's inspector. The policy then lists only those actions, in the emulator build and in the AWS export.
   - **Traffic**: load balancers register ECS services, instances, Auto Scaling groups and Lambdas, with path rules when there are several kinds. CloudFront gets one origin per target, and buckets stay private behind origin access control. Route 53 gets alias records, and a Cognito pool puts a JWT authorizer on an API's routes.
 
   Anything else, like a database "calling" a Lambda or an edge into a VPC, is refused with a short reason. A connection's label sets the API route (`POST /orders`), the S3 key prefix (`uploads/`), the DNS record name or the Cognito trigger. Switch a connection to *depends_on only* to order two resources without wiring them.
@@ -99,13 +99,13 @@ Agents design, deploy and test environments through the same backend, with the s
 }
 ```
 
-`--token` / `LOCALCLOUD_TOKEN` when one is set. Against the compose stack, point `--url http://127.0.0.1:5173` and use container paths (`--project /projects/infra`). The 39 tools, grouped:
+`--token` / `LOCALCLOUD_TOKEN` when one is set. Against the compose stack, point `--url http://127.0.0.1:5173` and use container paths (`--project /projects/infra`). The 40 tools, grouped:
 
 | Group | Tools |
 | --- | --- |
 | Read | `projects_list` `project_get` `catalog_list` `project_validate` |
 | History | `versions_list` `version_get` `version_restore` `project_diff` `runs_list` `run_get` `events_list` |
-| Design | `resource_add` `resource_configure` `resource_move` `resource_remove` `connection_create` `connection_remove` `env_override` `env_enable` `lambda_code_set` `extra_hcl_set` `template_apply` `import_terraform` |
+| Design | `resource_add` `resource_configure` `resource_move` `resource_remove` `connection_create` `connection_configure` `connection_remove` `env_override` `env_enable` `lambda_code_set` `extra_hcl_set` `template_apply` `import_terraform` |
 | Environments | `environment_add` `environment_update` `environment_remove` |
 | Run | `sync` `emulator_status` `emulator_start` `emulator_stop` `terraform_run` `apply_plan` `state_get` `lambda_watch` |
 | Data | `explore` (every Data tab operation; name the resource by canvas id) |

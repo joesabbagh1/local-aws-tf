@@ -339,9 +339,20 @@ export async function runMcpServer(argv: string[]): Promise<void> {
 
   register('connection_create', {
     description:
-      'Connect two resources. The canvas rules apply: only meaningful relationships (a queue triggering a Lambda, an LB in front of a service, …) are accepted; anything else is refused with the reason.',
-    inputSchema: { from: z.string(), to: z.string(), projectId },
+      'Connect two resources. The canvas rules apply: only meaningful relationships (a queue triggering a Lambda, an LB in front of a service, …) are accepted; anything else is refused with the reason. access narrows the IAM grant of a call to DynamoDB, S3, SQS, KMS or EFS: read or write (default: both).',
+    inputSchema: { from: z.string(), to: z.string(), access: z.enum(['read', 'write', 'readwrite']).optional(), projectId },
   }, designOp('connection.create'));
+
+  register('connection_configure', {
+    description:
+      "Change a connection: its label (an API route, S3 prefix, DNS name…) and/or its access level (read, write or readwrite; null for the full grant). The levels a target offers are named in the error when one doesn't apply.",
+    inputSchema: {
+      id: z.string(),
+      access: z.enum(['read', 'write', 'readwrite']).nullable().optional(),
+      label: z.string().optional(),
+      projectId,
+    },
+  }, designOp('connection.configure'));
 
   register('connection_remove', {
     description: 'Remove a connection by id.',

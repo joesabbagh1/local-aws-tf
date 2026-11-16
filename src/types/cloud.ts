@@ -128,6 +128,8 @@ export interface CloudEdgeData extends Record<string, unknown> {
     | 'target_route'
     | 'data_flow';
   label?: string;
+  /** For a connection that grants access: read or write only (see accessLevelsFor). Absent: the full grant. */
+  access?: 'read' | 'write' | 'readwrite';
   iamActions?: string[];
   port?: number;
   protocol?: string;
